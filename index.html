@@ -1109,6 +1109,13 @@ async function viewRadiology(c) {
   const pending = orders.filter(o => o.status === 'pending');
   const completed = orders.filter(o => o.status === 'ready');
 
+  const studyLine = (o) => {
+    let s = esc(o.study||'');
+    if (o.category) s += ` · <span class="text-gray-500">${esc(o.category)}</span>`;
+    if (o.side) s += ` · <b class="text-red-600">Side: ${esc(o.side).toUpperCase()}</b>`;
+    return s;
+  };
+
   c.innerHTML = `
     <div class="flex justify-between items-center mb-4">
       <h2 class="text-2xl font-bold">Radiology</h2>
@@ -1126,7 +1133,7 @@ async function viewRadiology(c) {
           return `<tr>
             <td>${fmtDate(o.createdAt)}</td>
             <td>${esc(p ? patientName(p) : '—')}</td>
-            <td>${esc(o.study||'')} ${o.bodyPart?`· ${esc(o.bodyPart)}`:''}</td>
+            <td>${studyLine(o)}</td>
             <td><button onclick="radReportModal('${o.id}')" class="text-blue-600 text-sm">Enter Report</button></td>
           </tr>`;
         }).join('')}
@@ -1141,7 +1148,7 @@ async function viewRadiology(c) {
           return `<tr>
             <td>${fmtDate(o.completedAt||o.createdAt)}</td>
             <td>${esc(p ? patientName(p) : '—')}</td>
-            <td>${esc(o.study||'')}</td>
+            <td>${studyLine(o)}</td>
             <td><button onclick="radReportView('${o.id}')" class="text-blue-600 text-sm">View</button></td>
           </tr>`;
         }).join('')}
@@ -1153,7 +1160,6 @@ function radSelectPatient(pid) { radNewOrderModal(pid); }
 
 function radNewOrderModal(pid) {
   const studies = CACHE.radiologyTests;
-  // Group by category
   const groups = {};
   studies.forEach(s => {
     const cat = (s.category || 'Uncategorized').trim() || 'Uncategorized';
@@ -1169,20 +1175,30 @@ function radNewOrderModal(pid) {
       <input id="ro_patient" class="input" placeholder="Type name…" ${pid ? 'disabled' : ''}>
       <div id="ro_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
     </div>
-    <div class="grid grid-cols-2 gap-3">
-      <div><label class="label">Study *</label>
-        ${studies.length ? `<select id="ro_study" class="input">
-          <option value="">— Select —</option>
-          ${categories.map(cat => `
-            <optgroup label="${esc(cat)}">
-              ${groups[cat].map(s => `<option value="${esc(s.name)}" data-price="${s.price||0}">${esc(s.name)}${s.price ? ' — KES '+s.price : ''}</option>`).join('')}
-            </optgroup>
-          `).join('')}
-        </select>` : '<input id="ro_study" class="input" placeholder="e.g. Ultrasound">'}
-      </div>
-      <div><label class="label">Body Part / Region</label><input id="ro_body" class="input" placeholder="e.g. Abdomen"></div>
+    <div class="mb-3">
+      <label class="label">Study *</label>
+      ${studies.length ? `<select id="ro_study" class="input">
+        <option value="">— Select —</option>
+        ${categories.map(cat => `
+          <optgroup label="${esc(cat)}">
+            ${groups[cat].map(s => `<option value="${esc(s.name)}" data-cat="${esc(cat)}" data-price="${s.price||0}">${esc(s.name)}${s.price ? ' — KES '+s.price : ''}</option>`).join('')}
+          </optgroup>
+        `).join('')}
+      </select>` : '<input id="ro_study" class="input" placeholder="e.g. Chest PA">'}
     </div>
-    <div class="mt-3"><label class="label">Clinical Indication</label><textarea id="ro_indication" class="input" rows="2"></textarea></div>
+    <div class="mb-3">
+      <label class="label">Side / Laterality (optional)</label>
+      <select id="ro_side" class="input">
+        <option value="">—</option>
+        <option>Left</option>
+        <option>Right</option>
+        <option>Bilateral</option>
+      </select>
+    </div>
+    <div class="mb-3">
+      <label class="label">Clinical Indication</label>
+      <textarea id="ro_indication" class="input" rows="3" placeholder="e.g. suspected pneumonia, trauma, fever of unknown origin"></textarea>
+    </div>
     <div class="flex justify-end gap-2 mt-4">
       <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
       <button onclick="saveRadOrder()" class="btn btn-primary">Create Order</button>
@@ -1202,10 +1218,17 @@ async function saveRadOrder() {
   const studyEl = document.getElementById('ro_study');
   const study = studyEl.value.trim();
   if (!study) return toast('Select study', 'error');
+  let category = '';
+  if (studyEl.tagName === 'SELECT') {
+    const opt = studyEl.options[studyEl.selectedIndex];
+    category = opt?.dataset?.cat || '';
+  }
   const visit = await getOrCreateTodayVisit(patientId);
   await db.collection('radiologyOrders').add({
     patientId, visitId: visit.id, date: todayStr(),
-    study, bodyPart: document.getElementById('ro_body').value.trim(),
+    study,
+    category,
+    side: document.getElementById('ro_side').value,
     indication: document.getElementById('ro_indication').value.trim(),
     status: 'pending',
     orderedBy: CURRENT_USER.uid,
@@ -1220,9 +1243,13 @@ async function radReportModal(orderId) {
   const o = doc.data();
   const p = CACHE.patients.find(x => x.id === o.patientId);
   openModal(`
-    <h3 class="text-xl font-bold mb-4">Imaging Report</h3>
-    <p class="text-sm text-gray-600 mb-3">Patient: <b>${esc(p ? patientName(p) : '—')}</b> · Study: <b>${esc(o.study)}</b> ${o.bodyPart?`(${esc(o.bodyPart)})`:''}</p>
-    ${o.indication ? `<p class="text-sm text-gray-500 mb-3"><b>Indication:</b> ${esc(o.indication)}</p>` : ''}
+    <h3 class="text-xl font-bold mb-3">Imaging Report</h3>
+    <div class="bg-blue-50 border border-blue-200 rounded p-3 mb-3 text-sm">
+      <div><b>Patient:</b> ${esc(p ? patientName(p) : '—')}</div>
+      <div><b>Study:</b> ${esc(o.study)} ${o.category?`· ${esc(o.category)}`:''}</div>
+      ${o.side ? `<div><b>Side:</b> <span class="text-red-700 font-bold text-base">${esc(o.side).toUpperCase()}</span></div>` : ''}
+    </div>
+    ${o.indication ? `<div class="bg-yellow-50 border border-yellow-200 rounded p-3 mb-3 text-sm"><b>Clinical Indication:</b> ${esc(o.indication)}</div>` : ''}
     <div class="mb-3"><label class="label">Findings *</label><textarea id="rr_findings" class="input" rows="4">${esc(o.findings||'')}</textarea></div>
     <div class="mb-3"><label class="label">Impression / Conclusion</label><textarea id="rr_impression" class="input" rows="2">${esc(o.impression||'')}</textarea></div>
     <div class="flex justify-end gap-2">
@@ -1231,7 +1258,6 @@ async function radReportModal(orderId) {
     </div>
   `);
 }
-
 async function saveRadReport(orderId) {
   const findings = document.getElementById('rr_findings').value.trim();
   if (!findings) return toast('Findings required', 'error');
@@ -1262,8 +1288,10 @@ async function radReportView(orderId) {
       <table class="mb-3"><tbody>
         <tr><td><b>Patient:</b></td><td>${esc(p ? patientName(p) : '—')}</td>
             <td><b>Date:</b></td><td>${fmtDate(o.completedAt||o.createdAt)}</td></tr>
-        <tr><td><b>Study:</b></td><td>${esc(o.study)} ${o.bodyPart?`— ${esc(o.bodyPart)}`:''}</td>
-            <td><b>Number:</b></td><td>${esc(p?.number||'')}</td></tr>
+        <tr><td><b>Study:</b></td><td>${esc(o.study)} ${o.bodyPart?`— ${esc(o.bodyPart)}`:''} ${o.side?`<b>(${esc(o.side).toUpperCase()})</b>`:''}</td>
+            <td><b>Category:</b></td><td>${esc(o.category||'—')}</td></tr>
+        <tr><td><b>Number:</b></td><td>${esc(p?.number||'')}</td>
+            <td><b>Indication:</b></td><td>${esc(o.indication||'—')}</td></tr>
       </tbody></table>
       <p><b>Findings:</b></p><p class="whitespace-pre-wrap mb-3">${esc(o.findings||'')}</p>
       <p><b>Impression:</b></p><p class="whitespace-pre-wrap">${esc(o.impression||'')}</p>
