@@ -1153,6 +1153,15 @@ function radSelectPatient(pid) { radNewOrderModal(pid); }
 
 function radNewOrderModal(pid) {
   const studies = CACHE.radiologyTests;
+  // Group by category
+  const groups = {};
+  studies.forEach(s => {
+    const cat = (s.category || 'Uncategorized').trim() || 'Uncategorized';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(s);
+  });
+  const categories = Object.keys(groups).sort();
+
   openModal(`
     <h3 class="text-xl font-bold mb-4">New Imaging Order</h3>
     <div class="mb-3">
@@ -1164,7 +1173,11 @@ function radNewOrderModal(pid) {
       <div><label class="label">Study *</label>
         ${studies.length ? `<select id="ro_study" class="input">
           <option value="">— Select —</option>
-          ${studies.map(s => `<option value="${esc(s.name)}" data-price="${s.price||0}">${esc(s.name)}</option>`).join('')}
+          ${categories.map(cat => `
+            <optgroup label="${esc(cat)}">
+              ${groups[cat].map(s => `<option value="${esc(s.name)}" data-price="${s.price||0}">${esc(s.name)}${s.price ? ' — KES '+s.price : ''}</option>`).join('')}
+            </optgroup>
+          `).join('')}
         </select>` : '<input id="ro_study" class="input" placeholder="e.g. Ultrasound">'}
       </div>
       <div><label class="label">Body Part / Region</label><input id="ro_body" class="input" placeholder="e.g. Abdomen"></div>
