@@ -874,6 +874,14 @@ function labSelectPatient(pid) { labNewOrderModal(pid); }
 
 function labNewOrderModal(pid) {
   const tests = CACHE.labTests;
+  const groups = {};
+  tests.forEach(t => {
+    const cat = (t.category || 'Uncategorized').trim() || 'Uncategorized';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(t);
+  });
+  const categories = Object.keys(groups).sort();
+
   openModal(`
     <h3 class="text-xl font-bold mb-4">New Lab Order</h3>
     <div class="mb-3">
@@ -883,12 +891,26 @@ function labNewOrderModal(pid) {
     </div>
     <div class="mb-3">
       <label class="label">Select Tests</label>
-      ${tests.length ? `<div class="border rounded max-h-64 overflow-y-auto p-2 grid grid-cols-2 gap-2">
-        ${tests.map(t => `<label class="flex items-center gap-2 text-sm">
-          <input type="checkbox" class="lab-test-cb" value="${t.id}" data-name="${esc(t.name)}" data-price="${t.price||0}">
-          <span>${esc(t.name)} <span class="text-gray-400">${t.price ? '· KES '+t.price : ''}</span></span>
-        </label>`).join('')}
-      </div>` : '<p class="text-gray-400">No tests in catalog. Add them in ⚙ Catalog.</p>'}
+      ${tests.length ? `
+        <div class="border rounded max-h-96 overflow-y-auto">
+          ${categories.map(cat => `
+            <div class="border-b last:border-b-0">
+              <div class="bg-gray-100 px-3 py-2 font-semibold text-sm flex items-center justify-between">
+                <span>${esc(cat)}</span>
+                <button type="button" class="text-xs text-blue-600" onclick="toggleCategory('${esc(cat).replace(/'/g,"\\'")}', true)">select all</button>
+              </div>
+              <div class="p-2 grid grid-cols-2 gap-2">
+                ${groups[cat].map(t => `
+                  <label class="flex items-center gap-2 text-sm">
+                    <input type="checkbox" class="lab-test-cb" value="${t.id}" data-name="${esc(t.name)}" data-price="${t.price||0}" data-cat="${esc(cat)}">
+                    <span>${esc(t.name)} <span class="text-gray-400">${t.price ? '· KES '+t.price : ''}</span></span>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : '<p class="text-gray-400">No tests in catalog. Add them in ⚙ Catalog.</p>'}
     </div>
     <div class="mb-3"><label class="label">Clinical Notes</label><textarea id="lo_notes" class="input" rows="2"></textarea></div>
     <div class="flex justify-end gap-2 mt-4">
@@ -896,6 +918,7 @@ function labNewOrderModal(pid) {
       <button onclick="saveLabOrder()" class="btn btn-primary">Create Order</button>
     </div>
   `, 'max-w-2xl');
+
   patientPicker('lo_patient', () => {});
   if (pid) {
     const p = CACHE.patients.find(x => x.id === pid);
@@ -903,6 +926,9 @@ function labNewOrderModal(pid) {
   }
 }
 
+function toggleCategory(cat, state) {
+  document.querySelectorAll(`.lab-test-cb[data-cat="${cat}"]`).forEach(cb => { cb.checked = state; });
+}
 async function saveLabOrder() {
   const inp = document.getElementById('lo_patient');
   const patientId = inp.dataset.patientId;
