@@ -987,8 +987,7 @@ async function labResultView(orderId) {
     </div>
   `);
 }
-
-async function manageLabCatalog() {
+  async function manageLabCatalog() {
   const snap = await db.collection('labTests').orderBy('name').get();
   const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   openModal(`
@@ -1002,13 +1001,56 @@ async function manageLabCatalog() {
       <input id="lc_price" type="number" class="input" placeholder="KES" style="max-width:100px">
       <button onclick="addLabTest()" class="btn btn-primary">Add</button>
     </div>
+    <div class="max-h-96 overflow-y-auto">
     <table><thead><tr><th>Name</th><th>Category</th><th>Price</th><th></th></tr></thead><tbody>
-      ${items.map(t => `<tr>
-        <td>${esc(t.name)}</td><td>${esc(t.category||'')}</td><td>${t.price||0}</td>
-        <td><button onclick="delLabTest('${t.id}')" class="text-red-600 text-sm">Delete</button></td>
+      ${items.map(t => `<tr id="lc_row_${t.id}">
+        <td><input class="input lc-edit-name" value="${esc(t.name)}" data-id="${t.id}" style="display:none"><span class="lc-view-name">${esc(t.name)}</span></td>
+        <td><input class="input lc-edit-cat" value="${esc(t.category||'')}" data-id="${t.id}" style="display:none"><span class="lc-view-cat">${esc(t.category||'')}</span></td>
+        <td><input type="number" class="input lc-edit-price" value="${t.price||0}" data-id="${t.id}" style="display:none"><span class="lc-view-price">${t.price||0}</span></td>
+        <td class="whitespace-nowrap">
+          <button class="lc-edit-btn text-blue-600 text-sm" onclick="editLabRow('${t.id}')">Edit</button>
+          <button class="lc-save-btn text-green-600 text-sm hidden" onclick="saveLabRow('${t.id}')">Save</button>
+          <button class="lc-cancel-btn text-gray-500 text-sm hidden" onclick="cancelLabRow('${t.id}')">Cancel</button>
+          <button class="lc-del-btn text-red-600 text-sm ml-2" onclick="delLabTest('${t.id}')">Delete</button>
+        </td>
       </tr>`).join('')}
     </tbody></table>
-  `);
+    </div>
+  `, 'max-w-3xl');
+}
+
+function editLabRow(id) {
+  const row = document.getElementById('lc_row_' + id);
+  row.querySelectorAll('.lc-edit-name, .lc-edit-cat, .lc-edit-price').forEach(i => i.style.display = '');
+  row.querySelectorAll('.lc-view-name, .lc-view-cat, .lc-view-price').forEach(s => s.style.display = 'none');
+  row.querySelector('.lc-edit-btn').classList.add('hidden');
+  row.querySelector('.lc-del-btn').classList.add('hidden');
+  row.querySelector('.lc-save-btn').classList.remove('hidden');
+  row.querySelector('.lc-cancel-btn').classList.remove('hidden');
+}
+
+function cancelLabRow(id) {
+  const row = document.getElementById('lc_row_' + id);
+  row.querySelectorAll('.lc-edit-name, .lc-edit-cat, .lc-edit-price').forEach(i => i.style.display = 'none');
+  row.querySelectorAll('.lc-view-name, .lc-view-cat, .lc-view-price').forEach(s => s.style.display = '');
+  row.querySelector('.lc-edit-btn').classList.remove('hidden');
+  row.querySelector('.lc-del-btn').classList.remove('hidden');
+  row.querySelector('.lc-save-btn').classList.add('hidden');
+  row.querySelector('.lc-cancel-btn').classList.add('hidden');
+}
+
+async function saveLabRow(id) {
+  const row = document.getElementById('lc_row_' + id);
+  const name = row.querySelector('.lc-edit-name').value.trim();
+  if (!name) return toast('Name required', 'error');
+  const category = row.querySelector('.lc-edit-cat').value.trim();
+  const price = parseFloat(row.querySelector('.lc-edit-price').value) || 0;
+  await db.collection('labTests').doc(id).update({ name, category, price });
+  toast('Updated', 'success');
+  row.querySelector('.lc-view-name').textContent = name;
+  row.querySelector('.lc-view-cat').textContent = category;
+  row.querySelector('.lc-view-price').textContent = price;
+  cancelLabRow(id);
 }
 async function addLabTest() {
   const name = document.getElementById('lc_name').value.trim();
@@ -1203,27 +1245,53 @@ async function manageRadCatalog() {
       <input id="rc_price" type="number" class="input" placeholder="KES" style="max-width:100px">
       <button onclick="addRadTest()" class="btn btn-primary">Add</button>
     </div>
+    <div class="max-h-96 overflow-y-auto">
     <table><thead><tr><th>Study</th><th>Price</th><th></th></tr></thead><tbody>
-      ${items.map(t => `<tr>
-        <td>${esc(t.name)}</td><td>${t.price||0}</td>
-        <td><button onclick="delRadTest('${t.id}')" class="text-red-600 text-sm">Delete</button></td>
+      ${items.map(t => `<tr id="rc_row_${t.id}">
+        <td><input class="input rc-edit-name" value="${esc(t.name)}" style="display:none"><span class="rc-view-name">${esc(t.name)}</span></td>
+        <td><input type="number" class="input rc-edit-price" value="${t.price||0}" style="display:none"><span class="rc-view-price">${t.price||0}</span></td>
+        <td class="whitespace-nowrap">
+          <button class="rc-edit-btn text-blue-600 text-sm" onclick="editRadRow('${t.id}')">Edit</button>
+          <button class="rc-save-btn text-green-600 text-sm hidden" onclick="saveRadRow('${t.id}')">Save</button>
+          <button class="rc-cancel-btn text-gray-500 text-sm hidden" onclick="cancelRadRow('${t.id}')">Cancel</button>
+          <button class="rc-del-btn text-red-600 text-sm ml-2" onclick="delRadTest('${t.id}')">Delete</button>
+        </td>
       </tr>`).join('')}
     </tbody></table>
-  `);
+    </div>
+  `, 'max-w-2xl');
 }
-async function addRadTest() {
-  const name = document.getElementById('rc_name').value.trim();
-  if (!name) return;
-  await db.collection('radiologyTests').add({
-    name, price: parseFloat(document.getElementById('rc_price').value)||0,
-    createdAt: firebase.firestore.FieldValue.serverTimestamp()
-  });
-  toast('Added'); manageRadCatalog();
+
+function editRadRow(id) {
+  const row = document.getElementById('rc_row_' + id);
+  row.querySelectorAll('.rc-edit-name, .rc-edit-price').forEach(i => i.style.display = '');
+  row.querySelectorAll('.rc-view-name, .rc-view-price').forEach(s => s.style.display = 'none');
+  row.querySelector('.rc-edit-btn').classList.add('hidden');
+  row.querySelector('.rc-del-btn').classList.add('hidden');
+  row.querySelector('.rc-save-btn').classList.remove('hidden');
+  row.querySelector('.rc-cancel-btn').classList.remove('hidden');
 }
-async function delRadTest(id) {
-  if (!confirm('Delete?')) return;
-  await db.collection('radiologyTests').doc(id).delete();
-  manageRadCatalog();
+
+function cancelRadRow(id) {
+  const row = document.getElementById('rc_row_' + id);
+  row.querySelectorAll('.rc-edit-name, .rc-edit-price').forEach(i => i.style.display = 'none');
+  row.querySelectorAll('.rc-view-name, .rc-view-price').forEach(s => s.style.display = '');
+  row.querySelector('.rc-edit-btn').classList.remove('hidden');
+  row.querySelector('.rc-del-btn').classList.remove('hidden');
+  row.querySelector('.rc-save-btn').classList.add('hidden');
+  row.querySelector('.rc-cancel-btn').classList.add('hidden');
+}
+
+async function saveRadRow(id) {
+  const row = document.getElementById('rc_row_' + id);
+  const name = row.querySelector('.rc-edit-name').value.trim();
+  if (!name) return toast('Name required', 'error');
+  const price = parseFloat(row.querySelector('.rc-edit-price').value) || 0;
+  await db.collection('radiologyTests').doc(id).update({ name, price });
+  toast('Updated', 'success');
+  row.querySelector('.rc-view-name').textContent = name;
+  row.querySelector('.rc-view-price').textContent = price;
+  cancelRadRow(id);
 }
 // ============================================================
 // PHARMACY MODULE
@@ -1417,7 +1485,6 @@ async function confirmDispense(rxId) {
   toast('Dispensed', 'success');
   closeModal(); renderView('pharmacy');
 }
-
 async function manageDrugCatalog() {
   const snap = await db.collection('drugs').orderBy('name').get();
   const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1426,25 +1493,33 @@ async function manageDrugCatalog() {
       <h3 class="text-xl font-bold">Drug Catalog</h3>
       <button onclick="closeModal()" class="btn btn-secondary">Close</button>
     </div>
-    <div class="grid grid-cols-5 gap-2 mb-3">
+    <div class="grid grid-cols-5 gap-2 mb-2">
       <input id="dc_name" class="input col-span-2" placeholder="Name">
       <input id="dc_strength" class="input" placeholder="Strength">
       <input id="dc_price" type="number" class="input" placeholder="Price">
       <input id="dc_stock" type="number" class="input" placeholder="Stock">
     </div>
     <div class="grid grid-cols-5 gap-2 mb-3">
-      <input id="dc_form" class="input" placeholder="Form (tab/syr)">
-      <input id="dc_reorder" type="number" class="input" placeholder="Reorder lvl">
+      <input id="dc_form" class="input" placeholder="Form">
+      <input id="dc_reorder" type="number" class="input" placeholder="Reorder">
       <button onclick="addDrug()" class="btn btn-primary col-span-3">+ Add Drug</button>
     </div>
     <div class="max-h-96 overflow-y-auto">
-    <table><thead><tr><th>Name</th><th>Form</th><th>Strength</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>
-      ${items.map(d => `<tr>
-        <td>${esc(d.name)}</td><td>${esc(d.form||'')}</td><td>${esc(d.strength||'')}</td>
-        <td>${d.price||0}</td><td>${d.stock||0}</td>
-        <td>
-          <button onclick="restockDrug('${d.id}')" class="text-blue-600 text-sm">Restock</button>
-          <button onclick="delDrug('${d.id}')" class="text-red-600 text-sm ml-2">Delete</button>
+    <table><thead><tr>
+      <th>Name</th><th>Form</th><th>Strength</th><th>Price</th><th>Stock</th><th>Reorder</th><th></th>
+    </tr></thead><tbody>
+      ${items.map(d => `<tr id="dc_row_${d.id}">
+        <td><input class="input dc-edit-name" value="${esc(d.name)}" style="display:none"><span class="dc-view-name">${esc(d.name)}</span></td>
+        <td><input class="input dc-edit-form" value="${esc(d.form||'')}" style="display:none"><span class="dc-view-form">${esc(d.form||'')}</span></td>
+        <td><input class="input dc-edit-strength" value="${esc(d.strength||'')}" style="display:none"><span class="dc-view-strength">${esc(d.strength||'')}</span></td>
+        <td><input type="number" class="input dc-edit-price" value="${d.price||0}" style="display:none"><span class="dc-view-price">${d.price||0}</span></td>
+        <td><input type="number" class="input dc-edit-stock" value="${d.stock||0}" style="display:none"><span class="dc-view-stock">${d.stock||0}</span></td>
+        <td><input type="number" class="input dc-edit-reorder" value="${d.reorder||0}" style="display:none"><span class="dc-view-reorder">${d.reorder||0}</span></td>
+        <td class="whitespace-nowrap">
+          <button class="dc-edit-btn text-blue-600 text-sm" onclick="editDrugRow('${d.id}')">Edit</button>
+          <button class="dc-save-btn text-green-600 text-sm hidden" onclick="saveDrugRow('${d.id}')">Save</button>
+          <button class="dc-cancel-btn text-gray-500 text-sm hidden" onclick="cancelDrugRow('${d.id}')">Cancel</button>
+          <button class="dc-del-btn text-red-600 text-sm ml-2" onclick="delDrug('${d.id}')">Delete</button>
         </td>
       </tr>`).join('')}
     </tbody></table>
@@ -1452,6 +1527,47 @@ async function manageDrugCatalog() {
   `, 'max-w-4xl');
 }
 
+function editDrugRow(id) {
+  const row = document.getElementById('dc_row_' + id);
+  row.querySelectorAll('input').forEach(i => i.style.display = '');
+  row.querySelectorAll('span[class^="dc-view-"]').forEach(s => s.style.display = 'none');
+  row.querySelector('.dc-edit-btn').classList.add('hidden');
+  row.querySelector('.dc-del-btn').classList.add('hidden');
+  row.querySelector('.dc-save-btn').classList.remove('hidden');
+  row.querySelector('.dc-cancel-btn').classList.remove('hidden');
+}
+
+function cancelDrugRow(id) {
+  const row = document.getElementById('dc_row_' + id);
+  row.querySelectorAll('input').forEach(i => i.style.display = 'none');
+  row.querySelectorAll('span[class^="dc-view-"]').forEach(s => s.style.display = '');
+  row.querySelector('.dc-edit-btn').classList.remove('hidden');
+  row.querySelector('.dc-del-btn').classList.remove('hidden');
+  row.querySelector('.dc-save-btn').classList.add('hidden');
+  row.querySelector('.dc-cancel-btn').classList.add('hidden');
+}
+
+async function saveDrugRow(id) {
+  const row = document.getElementById('dc_row_' + id);
+  const data = {
+    name: row.querySelector('.dc-edit-name').value.trim(),
+    form: row.querySelector('.dc-edit-form').value.trim(),
+    strength: row.querySelector('.dc-edit-strength').value.trim(),
+    price: parseFloat(row.querySelector('.dc-edit-price').value) || 0,
+    stock: parseInt(row.querySelector('.dc-edit-stock').value) || 0,
+    reorder: parseInt(row.querySelector('.dc-edit-reorder').value) || 0
+  };
+  if (!data.name) return toast('Name required', 'error');
+  await db.collection('drugs').doc(id).update(data);
+  toast('Updated', 'success');
+  row.querySelector('.dc-view-name').textContent = data.name;
+  row.querySelector('.dc-view-form').textContent = data.form;
+  row.querySelector('.dc-view-strength').textContent = data.strength;
+  row.querySelector('.dc-view-price').textContent = data.price;
+  row.querySelector('.dc-view-stock').textContent = data.stock;
+  row.querySelector('.dc-view-reorder').textContent = data.reorder;
+  cancelDrugRow(id);
+}
 async function addDrug() {
   const name = document.getElementById('dc_name').value.trim();
   if (!name) return toast('Name required', 'error');
