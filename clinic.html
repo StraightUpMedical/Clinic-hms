@@ -1,0 +1,1856 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Clinic HMS</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<style>
+  body { font-family: system-ui, -apple-system, sans-serif; }
+  .hidden { display: none !important; }
+  .tab-active { border-bottom: 3px solid #2563eb; color: #2563eb; font-weight: 600; }
+  .card { background:#fff; border-radius:8px; box-shadow:0 1px 3px rgba(0,0,0,.1); }
+  .btn { padding:.5rem 1rem; border-radius:6px; font-weight:500; cursor:pointer; border:none; }
+  .btn-primary { background:#2563eb; color:#fff; }
+  .btn-primary:hover { background:#1d4ed8; }
+  .btn-secondary { background:#e5e7eb; color:#111; }
+  .btn-secondary:hover { background:#d1d5db; }
+  .btn-danger { background:#dc2626; color:#fff; }
+  .input { width:100%; padding:.5rem; border:1px solid #d1d5db; border-radius:6px; }
+  .label { display:block; font-size:.85rem; font-weight:500; margin-bottom:.25rem; color:#374151; }
+  .badge { display:inline-block; padding:.15rem .5rem; border-radius:9999px; font-size:.75rem; font-weight:600; }
+  table { width:100%; border-collapse:collapse; }
+  th, td { padding:.5rem; text-align:left; border-bottom:1px solid #e5e7eb; font-size:.875rem; }
+  th { background:#f9fafb; font-weight:600; }
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-start; justify-content:center; padding:2rem; overflow-y:auto; z-index:50; }
+  .modal { background:#fff; border-radius:8px; max-width:900px; width:100%; padding:1.5rem; }
+  @media print {
+    body * { visibility: hidden; }
+    #printArea, #printArea * { visibility: visible; }
+    #printArea { position: absolute; left: 0; top: 0; width: 100%; }
+    .no-print { display: none !important; }
+  }
+</style>
+</head>
+<body class="bg-gray-100">
+
+<div id="loginScreen" class="min-h-screen flex items-center justify-center">
+  <div class="card p-8 w-full max-w-sm">
+    <h1 class="text-2xl font-bold text-center mb-2">🏥 Clinic HMS</h1>
+    <p class="text-center text-gray-500 text-sm mb-6">Sign in to continue</p>
+    <div id="loginError" class="hidden bg-red-100 text-red-700 p-2 rounded mb-3 text-sm"></div>
+    <label class="label">Email</label>
+    <input id="loginEmail" type="email" class="input mb-3" placeholder="you@clinic.com">
+    <label class="label">Password</label>
+    <input id="loginPassword" type="password" class="input mb-4" placeholder="••••••••">
+    <button onclick="doLogin()" class="btn btn-primary w-full">Sign In</button>
+    <p class="text-xs text-gray-400 text-center mt-4">First time? Ask admin to create your account.</p>
+  </div>
+</div>
+
+<div id="appScreen" class="hidden">
+  <div class="bg-white border-b px-4 py-2 flex items-center justify-between">
+    <div class="flex items-center gap-3">
+      <span class="text-xl font-bold">🏥 Clinic HMS</span>
+      <span id="currentUser" class="text-sm text-gray-500"></span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span id="currentRole" class="badge bg-blue-100 text-blue-700"></span>
+      <button onclick="doLogout()" class="btn btn-secondary text-sm">Logout</button>
+    </div>
+  </div>
+  <div class="bg-white border-b px-4 flex gap-1 overflow-x-auto" id="navTabs"></div>
+  <div class="p-4 max-w-7xl mx-auto" id="mainContent"></div>
+</div>
+
+<div id="modalRoot"></div>
+
+<script>
+// ============================================================
+// FIREBASE CONFIG — PASTE YOURS HERE
+// ============================================================
+const firebaseConfig = {
+  apiKey: "PASTE_HERE",
+  authDomain: "PASTE_HERE",
+  projectId: "PASTE_HERE",
+  storageBucket: "PASTE_HERE",
+  messagingSenderId: "PASTE_HERE",
+  appId: "PASTE_HERE"
+};
+// ============================================================
+
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+// ---------- GLOBAL STATE ----------
+let CURRENT_USER = null;
+let CURRENT_VIEW = 'dashboard';
+let CACHE = { patients: [], drugs: [], labTests: [], radiologyTests: [] };
+
+// ---------- AUTH ----------
+function doLogin() {
+  const email = document.getElementById('loginEmail').value.trim();
+  const pass = document.getElementById('loginPassword').value;
+  const err = document.getElementById('loginError');
+  err.classList.add('hidden');
+  auth.signInWithEmailAndPassword(email, pass).catch(e => {
+    err.textContent = e.message;
+    err.classList.remove('hidden');
+  });
+}
+
+function doLogout() { auth.signOut(); }
+
+auth.onAuthStateChanged(async (user) => {
+  if (!user) {
+    CURRENT_USER = null;
+    document.getElementById('loginScreen').classList.remove('hidden');
+    document.getElementById('appScreen').classList.add('hidden');
+    return;
+  }
+  let profile = null;
+  try {
+    const doc = await db.collection('users').doc(user.uid).get();
+    if (doc.exists) profile = doc.data();
+  } catch (e) { console.error(e); }
+
+  if (!profile) {
+    profile = { email: user.email, name: user.email, role: 'pending' };
+    await db.collection('users').doc(user.uid).set(profile);
+  }
+
+  CURRENT_USER = { uid: user.uid, email: user.email, ...profile };
+  document.getElementById('loginScreen').classList.add('hidden');
+  document.getElementById('appScreen').classList.remove('hidden');
+  document.getElementById('currentUser').textContent = CURRENT_USER.name || CURRENT_USER.email;
+  document.getElementById('currentRole').textContent = CURRENT_USER.role;
+
+  if (CURRENT_USER.role === 'pending') {
+    document.getElementById('mainContent').innerHTML =
+      '<div class="card p-6 text-center"><h2 class="text-xl font-bold mb-2">Account Pending</h2>' +
+      '<p class="text-gray-600">Your account is created but no role has been assigned yet. ' +
+      'Ask the admin to assign you a role in Firebase Console → Firestore → users → your UID.</p></div>';
+    return;
+  }
+
+  buildNav();
+  await loadCache();
+  renderView('dashboard');
+});
+
+// ---------- NAVIGATION ----------
+const NAV_ITEMS = [
+  { key: 'dashboard',     label: 'Dashboard',     roles: ['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier'] },
+  { key: 'patients',      label: 'Patients',      roles: ['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier'] },
+  { key: 'nurse',         label: 'Nurse / Triage',roles: ['admin','nurse','doctor'] },
+  { key: 'consultation',  label: 'Consultation',  roles: ['admin','doctor'] },
+  { key: 'lab',           label: 'Laboratory',    roles: ['admin','lab','doctor','nurse'] },
+  { key: 'radiology',     label: 'Radiology',     roles: ['admin','radiology','doctor'] },
+  { key: 'pharmacy',      label: 'Pharmacy',      roles: ['admin','pharmacy','doctor'] },
+  { key: 'orthopedics',   label: 'Orthopedics',   roles: ['admin','doctor'] },
+  { key: 'payments',      label: 'Payments',      roles: ['admin','cashier','reception'] },
+  { key: 'admin',         label: 'Admin',         roles: ['admin'] }
+];
+
+function buildNav() {
+  const nav = document.getElementById('navTabs');
+  nav.innerHTML = '';
+  NAV_ITEMS.filter(i => i.roles.includes(CURRENT_USER.role)).forEach(item => {
+    const btn = document.createElement('button');
+    btn.className = 'px-4 py-3 text-sm whitespace-nowrap';
+    btn.textContent = item.label;
+    btn.dataset.key = item.key;
+    btn.onclick = () => renderView(item.key);
+    nav.appendChild(btn);
+  });
+}
+
+function setActiveTab(key) {
+  document.querySelectorAll('#navTabs button').forEach(b => {
+    b.classList.toggle('tab-active', b.dataset.key === key);
+  });
+}
+
+// ---------- CACHE ----------
+async function loadCache() {
+  try {
+    const [pSnap, dSnap, lSnap, rSnap] = await Promise.all([
+      db.collection('patients').orderBy('createdAt', 'desc').limit(500).get(),
+      db.collection('drugs').orderBy('name').get(),
+      db.collection('labTests').orderBy('name').get(),
+      db.collection('radiologyTests').orderBy('name').get()
+    ]);
+    CACHE.patients = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    CACHE.drugs = dSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    CACHE.labTests = lSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    CACHE.radiologyTests = rSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  } catch (e) { console.error('Cache load error:', e); }
+}
+
+async function refreshPatients() {
+  const snap = await db.collection('patients').orderBy('createdAt', 'desc').limit(500).get();
+  CACHE.patients = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+}
+
+// ---------- UTILITIES ----------
+function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; }
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmtDate(ts) {
+  if (!ts) return '—';
+  const d = ts.toDate ? ts.toDate() : new Date(ts);
+  return d.toLocaleDateString('en-GB') + ' ' + d.toLocaleTimeString('en-GB', {hour:'2-digit',minute:'2-digit'});
+}
+function todayStr() { return new Date().toISOString().slice(0,10); }
+function toast(msg, type='info') {
+  const colors = { info:'bg-blue-600', success:'bg-green-600', error:'bg-red-600' };
+  const t = el(`<div class="fixed top-4 right-4 ${colors[type]} text-white px-4 py-2 rounded shadow-lg z-50">${esc(msg)}</div>`);
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+function openModal(html, size='max-w-3xl') {
+  const root = document.getElementById('modalRoot');
+  root.innerHTML = `<div class="modal-bg" onclick="if(event.target===this)closeModal()">
+    <div class="modal ${size}">${html}</div>
+  </div>`;
+}
+function closeModal() { document.getElementById('modalRoot').innerHTML = ''; }
+function patientName(p) { return `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.number || p.id; }
+
+// ---------- VIEW ROUTER ----------
+async function renderView(key) {
+  CURRENT_VIEW = key;
+  setActiveTab(key);
+  const c = document.getElementById('mainContent');
+  c.innerHTML = '<div class="text-center py-10 text-gray-500">Loading…</div>';
+  try {
+    if (key === 'dashboard')    await viewDashboard(c);
+    else if (key === 'patients')    await viewPatients(c);
+    else if (key === 'nurse')       await viewNurse(c);
+    else if (key === 'consultation')await viewConsultation(c);
+    else if (key === 'lab')         await viewLab(c);
+    else if (key === 'radiology')   await viewRadiology(c);
+    else if (key === 'pharmacy')    await viewPharmacy(c);
+    else if (key === 'orthopedics') await viewOrthopedics(c);
+    else if (key === 'payments')    await viewPayments(c);
+    else if (key === 'admin')       await viewAdmin(c);
+  } catch (e) {
+    console.error(e);
+    c.innerHTML = `<div class="card p-6 text-red-600">Error: ${esc(e.message)}</div>`;
+  }
+}
+
+// ---------- DASHBOARD ----------
+async function viewDashboard(c) {
+  const today = todayStr();
+  const [visitsSnap, apptSnap, paySnap] = await Promise.all([
+    db.collection('visits').where('date', '==', today).get(),
+    db.collection('appointments').where('date', '==', today).get(),
+    db.collection('payments').where('date', '==', today).get()
+  ]);
+  const totalToday = paySnap.docs.reduce((s, d) => s + (d.data().amount || 0), 0);
+  const cards = [
+    { label: 'Patients Today', value: visitsSnap.size, color: 'bg-blue-500' },
+    { label: 'Appointments Today', value: apptSnap.size, color: 'bg-green-500' },
+    { label: 'Total Patients (cached)', value: CACHE.patients.length, color: 'bg-purple-500' },
+    { label: 'Revenue Today (KES)', value: totalToday.toLocaleString(), color: 'bg-orange-500' }
+  ];
+  c.innerHTML = `
+    <h2 class="text-2xl font-bold mb-4">Dashboard</h2>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      ${cards.map(x => `<div class="card p-4 text-white ${x.color}"><div class="text-sm opacity-90">${x.label}</div><div class="text-2xl font-bold">${x.value}</div></div>`).join('')}
+    </div>
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Quick Actions</h3>
+      <div class="flex flex-wrap gap-2">
+        <button onclick="newPatientModal()" class="btn btn-primary">+ Register Patient</button>
+        <button onclick="renderView('nurse')" class="btn btn-secondary">Nurse Triage</button>
+        <button onclick="renderView('consultation')" class="btn btn-secondary">Start Consultation</button>
+        <button onclick="renderView('payments')" class="btn btn-secondary">Record Payment</button>
+      </div>
+    </div>`;
+}
+
+// ============================================================
+// PATIENTS MODULE
+// ============================================================
+async function viewPatients(c) {
+  await refreshPatients();
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Patients</h2>
+      <div class="flex gap-2">
+        <input id="patientSearch" placeholder="Search name / phone / number…" class="input" style="width:280px" oninput="filterPatients()">
+        <button onclick="newPatientModal()" class="btn btn-primary">+ New Patient</button>
+      </div>
+    </div>
+    <div class="card overflow-x-auto">
+      <table>
+        <thead><tr><th>No.</th><th>Name</th><th>Sex/Age</th><th>Phone</th><th>Blood</th><th>Registered</th><th>Actions</th></tr></thead>
+        <tbody id="patientRows"></tbody>
+      </table>
+    </div>`;
+  renderPatientRows(CACHE.patients);
+}
+
+function filterPatients() {
+  const q = document.getElementById('patientSearch').value.toLowerCase();
+  const filtered = CACHE.patients.filter(p =>
+    patientName(p).toLowerCase().includes(q) ||
+    (p.phone || '').includes(q) ||
+    (p.number || '').toLowerCase().includes(q)
+  );
+  renderPatientRows(filtered);
+}
+
+function renderPatientRows(list) {
+  const tb = document.getElementById('patientRows');
+  if (!list.length) { tb.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-gray-400">No patients yet. Click "+ New Patient".</td></tr>'; return; }
+  tb.innerHTML = list.map(p => {
+    const age = p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 3.154e10) : '—';
+    return `<tr>
+      <td>${esc(p.number || '—')}</td>
+      <td><a href="#" onclick="openPatient('${p.id}');return false" class="text-blue-600 font-medium">${esc(patientName(p))}</a></td>
+      <td>${esc(p.gender || '—')} / ${age}</td>
+      <td>${esc(p.phone || '—')}</td>
+      <td>${esc(p.bloodGroup || '—')}</td>
+      <td>${fmtDate(p.createdAt)}</td>
+      <td><button onclick="openPatient('${p.id}')" class="text-blue-600 text-sm">Open</button></td>
+    </tr>`;
+  }).join('');
+}
+
+async function generatePatientNumber() {
+  const year = new Date().getFullYear();
+  const snap = await db.collection('counters').doc('patients').get();
+  let n = 1;
+  if (snap.exists) n = (snap.data().last || 0) + 1;
+  await db.collection('counters').doc('patients').set({ last: n });
+  return `P${year}-${String(n).padStart(4, '0')}`;
+}
+
+async function newPatientModal() {
+  const number = await generatePatientNumber();
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">Register New Patient</h3>
+    <form id="patientForm" onsubmit="savePatient(event)">
+      <input type="hidden" id="pf_number" value="${number}">
+      <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">First Name *</label><input id="pf_firstName" required class="input"></div>
+        <div><label class="label">Last Name *</label><input id="pf_lastName" required class="input"></div>
+        <div><label class="label">Date of Birth</label><input id="pf_dob" type="date" class="input"></div>
+        <div><label class="label">Gender</label>
+          <select id="pf_gender" class="input"><option value="">—</option><option>Male</option><option>Female</option></select>
+        </div>
+        <div><label class="label">Phone</label><input id="pf_phone" class="input"></div>
+        <div><label class="label">Blood Group</label>
+          <select id="pf_bloodGroup" class="input"><option value="">—</option>
+            <option>A+</option><option>A-</option><option>B+</option><option>B-</option>
+            <option>AB+</option><option>AB-</option><option>O+</option><option>O-</option></select>
+        </div>
+        <div class="col-span-2"><label class="label">Address</label><input id="pf_address" class="input"></div>
+        <div><label class="label">Next of Kin</label><input id="pf_kin" class="input"></div>
+        <div><label class="label">Next of Kin Phone</label><input id="pf_kinPhone" class="input"></div>
+        <div class="col-span-2"><label class="label">Allergies</label><textarea id="pf_allergies" class="input" rows="2"></textarea></div>
+        <div class="col-span-2"><label class="label">Chronic Conditions</label><textarea id="pf_chronic" class="input" rows="2"></textarea></div>
+      </div>
+      <div class="flex justify-end gap-2 mt-4">
+        <button type="button" onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+        <button type="submit" class="btn btn-primary">Save Patient</button>
+      </div>
+    </form>
+  `);
+}
+
+async function savePatient(e) {
+  e.preventDefault();
+  const data = {
+    number: document.getElementById('pf_number').value,
+    firstName: document.getElementById('pf_firstName').value.trim(),
+    lastName: document.getElementById('pf_lastName').value.trim(),
+    dob: document.getElementById('pf_dob').value,
+    gender: document.getElementById('pf_gender').value,
+    phone: document.getElementById('pf_phone').value.trim(),
+    bloodGroup: document.getElementById('pf_bloodGroup').value,
+    address: document.getElementById('pf_address').value.trim(),
+    kin: document.getElementById('pf_kin').value.trim(),
+    kinPhone: document.getElementById('pf_kinPhone').value.trim(),
+    allergies: document.getElementById('pf_allergies').value.trim(),
+    chronic: document.getElementById('pf_chronic').value.trim(),
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const ref = await db.collection('patients').add(data);
+  toast('Patient registered', 'success');
+  closeModal();
+  await refreshPatients();
+  renderView('patients');
+  setTimeout(() => openPatient(ref.id), 300);
+}
+
+// ---------- PATIENT UNIFIED RECORD ----------
+async function openPatient(patientId) {
+  const pRef = db.collection('patients').doc(patientId);
+  const [pDoc, visitsSnap, vitalsSnap, labsSnap, radsSnap, rxSnap, paySnap] = await Promise.all([
+    pRef.get(),
+    db.collection('visits').where('patientId','==',patientId).get(),
+    db.collection('vitals').where('patientId','==',patientId).get(),
+    db.collection('labOrders').where('patientId','==',patientId).get(),
+    db.collection('radiologyOrders').where('patientId','==',patientId).get(),
+    db.collection('prescriptions').where('patientId','==',patientId).get(),
+    db.collection('payments').where('patientId','==',patientId).get()
+  ]);
+  const p = { id: patientId, ...pDoc.data() };
+
+  const combine = (snap, type) => snap.docs.map(d => ({ id: d.id, _type: type, _ts: d.data().createdAt || d.data().date, ...d.data() }));
+  const timeline = [
+    ...combine(visitsSnap, 'Visit'),
+    ...combine(vitalsSnap, 'Vitals'),
+    ...combine(labsSnap, 'Lab'),
+    ...combine(radsSnap, 'Radiology'),
+    ...combine(rxSnap, 'Prescription'),
+    ...combine(paySnap, 'Payment')
+  ].sort((a, b) => {
+    const ta = a._ts?.toDate ? a._ts.toDate() : new Date(a._ts || 0);
+    const tb = b._ts?.toDate ? b._ts.toDate() : new Date(b._ts || 0);
+    return tb - ta;
+  });
+
+  openModal(`
+    <div class="flex justify-between items-start mb-4">
+      <div>
+        <h3 class="text-2xl font-bold">${esc(patientName(p))}</h3>
+        <p class="text-gray-500 text-sm">${esc(p.number||'')} · ${esc(p.gender||'')} · ${esc(p.dob||'')} · ${esc(p.phone||'')}</p>
+      </div>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+      <div class="card p-3 text-sm">
+        <div><b>Blood:</b> ${esc(p.bloodGroup||'—')}</div>
+        <div><b>Address:</b> ${esc(p.address||'—')}</div>
+        <div><b>Next of kin:</b> ${esc(p.kin||'—')} ${esc(p.kinPhone||'')}</div>
+      </div>
+      <div class="card p-3 text-sm">
+        <div><b>Allergies:</b> ${esc(p.allergies||'None recorded')}</div>
+        <div><b>Chronic:</b> ${esc(p.chronic||'None recorded')}</div>
+      </div>
+    </div>
+
+    <div class="flex flex-wrap gap-2 mb-4">
+      <button onclick="closeModal();goNurse('${patientId}')" class="btn btn-primary text-sm">+ Vitals</button>
+      <button onclick="closeModal();goConsult('${patientId}')" class="btn btn-primary text-sm">+ Consultation</button>
+      <button onclick="closeModal();goLab('${patientId}')" class="btn btn-primary text-sm">+ Lab Order</button>
+      <button onclick="closeModal();goRadiology('${patientId}')" class="btn btn-primary text-sm">+ Radiology</button>
+      <button onclick="closeModal();goPharmacy('${patientId}')" class="btn btn-primary text-sm">+ Prescription</button>
+      <button onclick="closeModal();goPayment('${patientId}')" class="btn btn-primary text-sm">+ Payment</button>
+      <button onclick="window.print()" class="btn btn-secondary text-sm">🖨 Print Record</button>
+    </div>
+
+    <h4 class="font-semibold mb-2">Clinical Timeline</h4>
+    <div class="border rounded max-h-96 overflow-y-auto">
+      ${timeline.length ? timeline.map(t => `
+        <div class="p-3 border-b text-sm hover:bg-gray-50" onclick="openEvent('${t._type}','${t.id}')" style="cursor:pointer">
+          <span class="badge bg-blue-100 text-blue-700">${t._type}</span>
+          <span class="text-gray-500 ml-2">${fmtDate(t._ts)}</span>
+          <span class="ml-2 text-gray-700">${esc(t.summary || t.complaint || t.study || t.reason || (t.items ? t.items.map(i=>i.name).join(', ') : '') || t.mode || '')}</span>
+        </div>
+      `).join('') : '<div class="p-4 text-gray-400 text-center">No events yet.</div>'}
+    </div>
+  `, 'max-w-4xl');
+}
+
+function goNurse(pid)      { renderView('nurse');        setTimeout(()=>nurseSelectPatient(pid), 100); }
+function goConsult(pid)    { renderView('consultation'); setTimeout(()=>consultSelectPatient(pid), 100); }
+function goLab(pid)        { renderView('lab');          setTimeout(()=>labSelectPatient(pid), 100); }
+function goRadiology(pid)  { renderView('radiology');    setTimeout(()=>radSelectPatient(pid), 100); }
+function goPharmacy(pid)   { renderView('pharmacy');     setTimeout(()=>pharmSelectPatient(pid), 100); }
+function goPayment(pid)    { renderView('payments');     setTimeout(()=>paySelectPatient(pid), 100); }
+
+async function openEvent(type, id) {
+  const collMap = { Visit:'visits', Vitals:'vitals', Lab:'labOrders', Radiology:'radiologyOrders', Prescription:'prescriptions', Payment:'payments' };
+  const snap = await db.collection(collMap[type]).doc(id).get();
+  if (!snap.exists) return toast('Record not found', 'error');
+  const d = snap.data();
+  const rows = Object.entries(d).filter(([k]) => !['patientId','createdAt'].includes(k))
+    .map(([k,v]) => `<tr><td class="font-medium">${esc(k)}</td><td>${esc(typeof v === 'object' && v?.toDate ? fmtDate(v) : JSON.stringify(v))}</td></tr>`).join('');
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">${type} — ${id.slice(0,8)}</h3>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+    <table><tbody>${rows}</tbody></table>
+  `);
+}
+
+// ============================================================
+// SHARED HELPERS
+// ============================================================
+async function getOrCreateTodayVisit(patientId) {
+  const today = todayStr();
+  const snap = await db.collection('visits')
+    .where('patientId','==',patientId)
+    .where('date','==',today)
+    .limit(1).get();
+  if (!snap.empty) return { id: snap.docs[0].id, ...snap.docs[0].data() };
+  const ref = await db.collection('visits').add({
+    patientId, date: today, status: 'open',
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    createdBy: CURRENT_USER.uid
+  });
+  return { id: ref.id, patientId, date: today, status: 'open' };
+}
+
+function patientPicker(inputId, onPick) {
+  const input = document.getElementById(inputId);
+  const list = document.getElementById(inputId + '_list');
+  input.oninput = () => {
+    const q = input.value.toLowerCase();
+    if (!q) { list.innerHTML = ''; return; }
+    const hits = CACHE.patients.filter(p =>
+      patientName(p).toLowerCase().includes(q) || (p.number||'').toLowerCase().includes(q) ||
+      (p.phone||'').includes(q)
+    ).slice(0, 8);
+    list.innerHTML = hits.map(p =>
+      `<div class="p-2 hover:bg-blue-50 cursor-pointer border-b" onclick='pickPatient("${p.id}")'>
+         <b>${esc(patientName(p))}</b> <span class="text-gray-500 text-xs">${esc(p.number||'')} · ${esc(p.phone||'')}</span>
+       </div>`).join('');
+    window.pickPatient = (id) => {
+      const p = CACHE.patients.find(x => x.id === id);
+      input.value = patientName(p);
+      input.dataset.patientId = id;
+      list.innerHTML = '';
+      onPick(p);
+    };
+  };
+}
+
+function selectedPatient(inputId) {
+  const id = document.getElementById(inputId)?.dataset.patientId;
+  return id ? CACHE.patients.find(p => p.id === id) : null;
+}
+
+// ============================================================
+// NURSE / TRIAGE MODULE
+// ============================================================
+async function viewNurse(c) {
+  await refreshPatients();
+  const today = todayStr();
+  const [visitsSnap, vitalsSnap] = await Promise.all([
+    db.collection('visits').where('date','==',today).get(),
+    db.collection('vitals').where('date','==',today).get()
+  ]);
+  const triaged = new Set(vitalsSnap.docs.map(d => d.data().patientId));
+  const queue = visitsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .map(v => ({ ...v, patient: CACHE.patients.find(p => p.id === v.patientId) }))
+    .filter(v => v.patient);
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Nurse / Triage</h2>
+      <button onclick="nurseNewVitalsModal()" class="btn btn-primary">+ Record Vitals</button>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Today's Queue (${queue.length})</h3>
+      ${queue.length ? `<table><thead><tr><th>Patient</th><th>No.</th><th>Status</th><th>Action</th></tr></thead><tbody>
+        ${queue.map(v => `<tr>
+          <td>${esc(patientName(v.patient))}</td>
+          <td>${esc(v.patient.number||'')}</td>
+          <td>${triaged.has(v.patientId)
+              ? '<span class="badge bg-green-100 text-green-700">Vitals done</span>'
+              : '<span class="badge bg-yellow-100 text-yellow-700">Awaiting vitals</span>'}</td>
+          <td><button onclick="nurseNewVitalsModal('${v.patientId}')" class="text-blue-600 text-sm">Record vitals</button></td>
+        </tr>`).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No patients in queue today.</p>'}
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Recent Vitals (today)</h3>
+      ${vitalsSnap.size ? `<table><thead><tr>
+        <th>Time</th><th>Patient</th><th>BP</th><th>Pulse</th><th>Temp</th><th>SpO₂</th><th>Wt</th><th>BMI</th>
+      </tr></thead><tbody>
+        ${vitalsSnap.docs.map(d => {
+          const v = d.data();
+          const p = CACHE.patients.find(x => x.id === v.patientId);
+          return `<tr>
+            <td>${fmtDate(v.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc(v.bp||'—')}</td><td>${esc(v.pulse||'—')}</td>
+            <td>${esc(v.temp||'—')}</td><td>${esc(v.spo2||'—')}</td>
+            <td>${esc(v.weight||'—')}</td><td>${esc(v.bmi||'—')}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No vitals recorded yet today.</p>'}
+    </div>`;
+}
+
+function nurseSelectPatient(pid) { nurseNewVitalsModal(pid); }
+
+function nurseNewVitalsModal(pid) {
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">Record Vitals</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="nv_patient" class="input" placeholder="Type name, phone or number…" ${pid ? 'disabled' : ''}>
+      <div id="nv_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+      <div><label class="label">BP (mmHg)</label><input id="nv_bp" class="input" placeholder="120/80"></div>
+      <div><label class="label">Pulse (bpm)</label><input id="nv_pulse" type="number" class="input"></div>
+      <div><label class="label">Temperature (°C)</label><input id="nv_temp" type="number" step="0.1" class="input"></div>
+      <div><label class="label">Weight (kg)</label><input id="nv_weight" type="number" step="0.1" class="input" oninput="calcBMI()"></div>
+      <div><label class="label">Height (cm)</label><input id="nv_height" type="number" class="input" oninput="calcBMI()"></div>
+      <div><label class="label">BMI</label><input id="nv_bmi" class="input" readonly></div>
+      <div><label class="label">SpO₂ (%)</label><input id="nv_spo2" type="number" class="input"></div>
+      <div><label class="label">Resp. Rate</label><input id="nv_rr" type="number" class="input"></div>
+      <div><label class="label">Blood Sugar</label><input id="nv_sugar" class="input" placeholder="mmol/L"></div>
+      <div class="col-span-2 md:col-span-3"><label class="label">Nurse Notes / Complaint</label>
+        <textarea id="nv_notes" class="input" rows="2"></textarea></div>
+    </div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveVitals()" class="btn btn-primary">Save Vitals</button>
+    </div>
+  `);
+  patientPicker('nv_patient', () => {});
+  if (pid) {
+    const p = CACHE.patients.find(x => x.id === pid);
+    if (p) {
+      const inp = document.getElementById('nv_patient');
+      inp.value = patientName(p);
+      inp.dataset.patientId = pid;
+    }
+  }
+}
+
+function calcBMI() {
+  const w = parseFloat(document.getElementById('nv_weight').value);
+  const h = parseFloat(document.getElementById('nv_height').value) / 100;
+  const bmi = (w && h) ? (w / (h*h)).toFixed(1) : '';
+  document.getElementById('nv_bmi').value = bmi;
+}
+
+async function saveVitals() {
+  const inp = document.getElementById('nv_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select a patient', 'error');
+  const visit = await getOrCreateTodayVisit(patientId);
+  await db.collection('vitals').add({
+    patientId, visitId: visit.id, date: todayStr(),
+    bp: document.getElementById('nv_bp').value.trim(),
+    pulse: document.getElementById('nv_pulse').value,
+    temp: document.getElementById('nv_temp').value,
+    weight: document.getElementById('nv_weight').value,
+    height: document.getElementById('nv_height').value,
+    bmi: document.getElementById('nv_bmi').value,
+    spo2: document.getElementById('nv_spo2').value,
+    rr: document.getElementById('nv_rr').value,
+    sugar: document.getElementById('nv_sugar').value.trim(),
+    notes: document.getElementById('nv_notes').value.trim(),
+    recordedBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Vitals saved', 'success');
+  closeModal();
+  renderView('nurse');
+}
+
+// ============================================================
+// CONSULTATION MODULE
+// ============================================================
+async function viewConsultation(c) {
+  await refreshPatients();
+  const today = todayStr();
+  const [consSnap, vitalsSnap] = await Promise.all([
+    db.collection('consultations').where('date','==',today).get(),
+    db.collection('vitals').where('date','==',today).get()
+  ]);
+  const consulted = new Set(consSnap.docs.map(d => d.data().patientId));
+  const todayVitals = vitalsSnap.docs.map(d => d.data());
+  const waiting = todayVitals.filter(v => !consulted.has(v.patientId))
+    .map(v => CACHE.patients.find(p => p.id === v.patientId))
+    .filter(Boolean);
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Consultation</h2>
+      <button onclick="consultNewModal()" class="btn btn-primary">+ New Consultation</button>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Waiting for Doctor (${waiting.length})</h3>
+      ${waiting.length ? `<table><thead><tr><th>Patient</th><th>No.</th><th>Vitals</th><th>Action</th></tr></thead><tbody>
+        ${waiting.map(p => {
+          const v = todayVitals.find(x => x.patientId === p.id);
+          return `<tr>
+            <td>${esc(patientName(p))}</td>
+            <td>${esc(p.number||'')}</td>
+            <td class="text-xs text-gray-600">BP ${esc(v?.bp||'—')} · T ${esc(v?.temp||'—')} · P ${esc(v?.pulse||'—')}</td>
+            <td><button onclick="consultNewModal('${p.id}')" class="text-blue-600 text-sm">Consult</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No patients waiting.</p>'}
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Consultations Today (${consSnap.size})</h3>
+      ${consSnap.size ? `<table><thead><tr><th>Time</th><th>Patient</th><th>Diagnosis</th><th></th></tr></thead><tbody>
+        ${consSnap.docs.map(d => {
+          const x = d.data();
+          const p = CACHE.patients.find(y => y.id === x.patientId);
+          return `<tr>
+            <td>${fmtDate(x.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc(x.diagnosis||'—')}</td>
+            <td><button onclick="openEvent('Visit','${x.visitId||''}')" class="text-blue-600 text-sm">View</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No consultations yet today.</p>'}
+    </div>`;
+}
+
+function consultSelectPatient(pid) { consultNewModal(pid); }
+
+async function consultNewModal(pid) {
+  let vitalsHtml = '';
+  if (pid) {
+    const vs = await db.collection('vitals').where('patientId','==',pid).where('date','==',todayStr()).limit(1).get();
+    if (!vs.empty) {
+      const v = vs.docs[0].data();
+      vitalsHtml = `<div class="bg-blue-50 border border-blue-200 rounded p-3 mb-3 text-sm">
+        <b>Today's Vitals:</b> BP ${esc(v.bp||'—')} · Pulse ${esc(v.pulse||'—')} · Temp ${esc(v.temp||'—')}°C · SpO₂ ${esc(v.spo2||'—')}% · Wt ${esc(v.weight||'—')}kg · BMI ${esc(v.bmi||'—')}
+        ${v.notes ? `<div class="mt-1"><b>Nurse notes:</b> ${esc(v.notes)}</div>` : ''}
+      </div>`;
+    }
+  }
+
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">Consultation</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="cs_patient" class="input" placeholder="Type name, phone or number…" ${pid ? 'disabled' : ''}>
+      <div id="cs_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+    ${vitalsHtml}
+
+    <div class="grid grid-cols-1 gap-3">
+      <div><label class="label">Chief Complaints *</label><textarea id="cs_complaint" class="input" rows="2"></textarea></div>
+      <div><label class="label">History (past medical / surgical / drug)</label><textarea id="cs_history" class="input" rows="2"></textarea></div>
+      <div><label class="label">Physical Examination</label><textarea id="cs_exam" class="input" rows="2"></textarea></div>
+      <div><label class="label">Investigations Planned</label><textarea id="cs_investigations" class="input" rows="2" placeholder="e.g. CBC, Urinalysis, CXR"></textarea></div>
+      <div><label class="label">Diagnosis *</label><input id="cs_diagnosis" class="input"></div>
+      <div><label class="label">Treatment Plan</label><textarea id="cs_treatment" class="input" rows="2"></textarea></div>
+      <div><label class="label">Follow-up Date</label><input id="cs_followup" type="date" class="input"></div>
+    </div>
+
+    <div class="flex justify-between items-center mt-4">
+      <div class="flex gap-2">
+        <button onclick="consultOrderLab()" class="btn btn-secondary text-sm">🔬 Order Lab</button>
+        <button onclick="consultOrderRadiology()" class="btn btn-secondary text-sm">🩻 Order Imaging</button>
+        <button onclick="consultPrescribe()" class="btn btn-secondary text-sm">💊 Prescribe</button>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+        <button onclick="saveConsultation()" class="btn btn-primary">Save Consultation</button>
+      </div>
+    </div>
+  `, 'max-w-3xl');
+
+  patientPicker('cs_patient', () => {});
+  if (pid) {
+    const p = CACHE.patients.find(x => x.id === pid);
+    if (p) {
+      const inp = document.getElementById('cs_patient');
+      inp.value = patientName(p);
+      inp.dataset.patientId = pid;
+    }
+  }
+}
+
+function consultOrderLab() {
+  const inp = document.getElementById('cs_patient');
+  const pid = inp.dataset.patientId;
+  if (!pid) return toast('Select patient first', 'error');
+  closeModal(); renderView('lab'); setTimeout(() => labSelectPatient(pid), 100);
+}
+function consultOrderRadiology() {
+  const inp = document.getElementById('cs_patient');
+  const pid = inp.dataset.patientId;
+  if (!pid) return toast('Select patient first', 'error');
+  closeModal(); renderView('radiology'); setTimeout(() => radSelectPatient(pid), 100);
+}
+function consultPrescribe() {
+  const inp = document.getElementById('cs_patient');
+  const pid = inp.dataset.patientId;
+  if (!pid) return toast('Select patient first', 'error');
+  closeModal(); renderView('pharmacy'); setTimeout(() => pharmSelectPatient(pid), 100);
+}
+
+async function saveConsultation() {
+  const inp = document.getElementById('cs_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select a patient', 'error');
+  const diagnosis = document.getElementById('cs_diagnosis').value.trim();
+  if (!diagnosis) return toast('Diagnosis is required', 'error');
+
+  const visit = await getOrCreateTodayVisit(patientId);
+  await db.collection('consultations').add({
+    patientId, visitId: visit.id, date: todayStr(),
+    complaint: document.getElementById('cs_complaint').value.trim(),
+    history: document.getElementById('cs_history').value.trim(),
+    exam: document.getElementById('cs_exam').value.trim(),
+    investigations: document.getElementById('cs_investigations').value.trim(),
+    diagnosis,
+    treatment: document.getElementById('cs_treatment').value.trim(),
+    followUp: document.getElementById('cs_followup').value,
+    doctorId: CURRENT_USER.uid,
+    doctorName: CURRENT_USER.name || CURRENT_USER.email,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Consultation saved', 'success');
+  closeModal();
+  renderView('consultation');
+}
+
+// ============================================================
+// LABORATORY MODULE
+// ============================================================
+async function viewLab(c) {
+  const [ordersSnap, catalogSnap] = await Promise.all([
+    db.collection('labOrders').orderBy('createdAt','desc').limit(100).get(),
+    db.collection('labTests').orderBy('name').get()
+  ]);
+  const orders = ordersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  CACHE.labTests = catalogSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const pending = orders.filter(o => o.status === 'pending');
+  const completed = orders.filter(o => o.status === 'ready');
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Laboratory</h2>
+      <div class="flex gap-2">
+        <button onclick="labNewOrderModal()" class="btn btn-primary">+ New Lab Order</button>
+        <button onclick="manageLabCatalog()" class="btn btn-secondary">⚙ Catalog</button>
+      </div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Pending (${pending.length})</h3>
+      ${pending.length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Tests</th><th>Status</th><th></th></tr></thead><tbody>
+        ${pending.map(o => {
+          const p = CACHE.patients.find(x => x.id === o.patientId);
+          return `<tr>
+            <td>${fmtDate(o.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc((o.tests||[]).map(t=>t.name).join(', '))}</td>
+            <td><span class="badge bg-yellow-100 text-yellow-700">pending</span></td>
+            <td><button onclick="labResultModal('${o.id}')" class="text-blue-600 text-sm">Enter Results</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No pending lab orders.</p>'}
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Completed (last 100)</h3>
+      ${completed.length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Tests</th><th></th></tr></thead><tbody>
+        ${completed.map(o => {
+          const p = CACHE.patients.find(x => x.id === o.patientId);
+          return `<tr>
+            <td>${fmtDate(o.completedAt||o.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc((o.tests||[]).map(t=>t.name).join(', '))}</td>
+            <td><button onclick="labResultView('${o.id}')" class="text-blue-600 text-sm">View</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No completed orders.</p>'}
+    </div>`;
+}
+
+function labSelectPatient(pid) { labNewOrderModal(pid); }
+
+function labNewOrderModal(pid) {
+  const tests = CACHE.labTests;
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">New Lab Order</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="lo_patient" class="input" placeholder="Type name…" ${pid ? 'disabled' : ''}>
+      <div id="lo_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+    <div class="mb-3">
+      <label class="label">Select Tests</label>
+      ${tests.length ? `<div class="border rounded max-h-64 overflow-y-auto p-2 grid grid-cols-2 gap-2">
+        ${tests.map(t => `<label class="flex items-center gap-2 text-sm">
+          <input type="checkbox" class="lab-test-cb" value="${t.id}" data-name="${esc(t.name)}" data-price="${t.price||0}">
+          <span>${esc(t.name)} <span class="text-gray-400">${t.price ? '· KES '+t.price : ''}</span></span>
+        </label>`).join('')}
+      </div>` : '<p class="text-gray-400">No tests in catalog. Add them in ⚙ Catalog.</p>'}
+    </div>
+    <div class="mb-3"><label class="label">Clinical Notes</label><textarea id="lo_notes" class="input" rows="2"></textarea></div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveLabOrder()" class="btn btn-primary">Create Order</button>
+    </div>
+  `, 'max-w-2xl');
+  patientPicker('lo_patient', () => {});
+  if (pid) {
+    const p = CACHE.patients.find(x => x.id === pid);
+    if (p) { const inp = document.getElementById('lo_patient'); inp.value = patientName(p); inp.dataset.patientId = pid; }
+  }
+}
+
+async function saveLabOrder() {
+  const inp = document.getElementById('lo_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const checked = [...document.querySelectorAll('.lab-test-cb:checked')];
+  if (!checked.length) return toast('Select at least one test', 'error');
+  const tests = checked.map(cb => ({ id: cb.value, name: cb.dataset.name, price: parseFloat(cb.dataset.price)||0 }));
+  const visit = await getOrCreateTodayVisit(patientId);
+  await db.collection('labOrders').add({
+    patientId, visitId: visit.id, date: todayStr(),
+    tests, notes: document.getElementById('lo_notes').value.trim(),
+    status: 'pending',
+    orderedBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Lab order created', 'success');
+  closeModal(); renderView('lab');
+}
+
+async function labResultModal(orderId) {
+  const doc = await db.collection('labOrders').doc(orderId).get();
+  const o = doc.data();
+  const p = CACHE.patients.find(x => x.id === o.patientId);
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">Enter Lab Results</h3>
+    <p class="text-sm text-gray-600 mb-3">Patient: <b>${esc(p ? patientName(p) : '—')}</b></p>
+    <div class="space-y-2 mb-3">
+      ${(o.tests||[]).map((t,i) => `<div class="border rounded p-2">
+        <label class="label">${esc(t.name)}</label>
+        <input class="input result-input" data-i="${i}" value="${esc(t.result||'')}" placeholder="Result / value">
+      </div>`).join('')}
+    </div>
+    <div class="mb-3"><label class="label">Lab Notes</label><textarea id="lr_notes" class="input" rows="2">${esc(o.labNotes||'')}</textarea></div>
+    <div class="flex justify-end gap-2">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveLabResults('${orderId}')" class="btn btn-primary">Save & Mark Ready</button>
+    </div>
+  `);
+}
+
+async function saveLabResults(orderId) {
+  const doc = await db.collection('labOrders').doc(orderId).get();
+  const o = doc.data();
+  const inputs = [...document.querySelectorAll('.result-input')];
+  const tests = o.tests.map((t,i) => ({ ...t, result: inputs[i].value.trim() }));
+  await db.collection('labOrders').doc(orderId).update({
+    tests, labNotes: document.getElementById('lr_notes').value.trim(),
+    status: 'ready',
+    completedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    completedBy: CURRENT_USER.uid
+  });
+  toast('Results saved', 'success');
+  closeModal(); renderView('lab');
+}
+
+async function labResultView(orderId) {
+  const doc = await db.collection('labOrders').doc(orderId).get();
+  const o = doc.data();
+  const p = CACHE.patients.find(x => x.id === o.patientId);
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Lab Report</h3>
+      <div><button onclick="window.print()" class="btn btn-secondary text-sm">🖨 Print</button>
+      <button onclick="closeModal()" class="btn btn-secondary text-sm">Close</button></div>
+    </div>
+    <div id="printArea">
+      <div class="text-center mb-4">
+        <h2 class="text-2xl font-bold">Clinic HMS</h2>
+        <p class="text-sm text-gray-500">Laboratory Report</p>
+      </div>
+      <table class="mb-3"><tbody>
+        <tr><td><b>Patient:</b></td><td>${esc(p ? patientName(p) : '—')}</td>
+            <td><b>Number:</b></td><td>${esc(p?.number||'')}</td></tr>
+        <tr><td><b>Date:</b></td><td>${fmtDate(o.completedAt||o.createdAt)}</td>
+            <td><b>Order:</b></td><td>${orderId.slice(0,8)}</td></tr>
+      </tbody></table>
+      <table>
+        <thead><tr><th>Test</th><th>Result</th></tr></thead>
+        <tbody>${(o.tests||[]).map(t => `<tr><td>${esc(t.name)}</td><td><b>${esc(t.result||'—')}</b></td></tr>`).join('')}</tbody>
+      </table>
+      ${o.labNotes ? `<p class="mt-3 text-sm"><b>Notes:</b> ${esc(o.labNotes)}</p>` : ''}
+    </div>
+  `);
+}
+
+async function manageLabCatalog() {
+  const snap = await db.collection('labTests').orderBy('name').get();
+  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Lab Test Catalog</h3>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+    <div class="flex gap-2 mb-3">
+      <input id="lc_name" class="input" placeholder="Test name (e.g. CBC)">
+      <input id="lc_category" class="input" placeholder="Category" style="max-width:160px">
+      <input id="lc_price" type="number" class="input" placeholder="KES" style="max-width:100px">
+      <button onclick="addLabTest()" class="btn btn-primary">Add</button>
+    </div>
+    <table><thead><tr><th>Name</th><th>Category</th><th>Price</th><th></th></tr></thead><tbody>
+      ${items.map(t => `<tr>
+        <td>${esc(t.name)}</td><td>${esc(t.category||'')}</td><td>${t.price||0}</td>
+        <td><button onclick="delLabTest('${t.id}')" class="text-red-600 text-sm">Delete</button></td>
+      </tr>`).join('')}
+    </tbody></table>
+  `);
+}
+async function addLabTest() {
+  const name = document.getElementById('lc_name').value.trim();
+  if (!name) return;
+  await db.collection('labTests').add({
+    name,
+    category: document.getElementById('lc_category').value.trim(),
+    price: parseFloat(document.getElementById('lc_price').value)||0,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Test added'); manageLabCatalog();
+}
+async function delLabTest(id) {
+  if (!confirm('Delete this test?')) return;
+  await db.collection('labTests').doc(id).delete();
+  manageLabCatalog();
+}
+
+// ============================================================
+// RADIOLOGY MODULE
+// ============================================================
+async function viewRadiology(c) {
+  const [ordersSnap, catalogSnap] = await Promise.all([
+    db.collection('radiologyOrders').orderBy('createdAt','desc').limit(100).get(),
+    db.collection('radiologyTests').orderBy('name').get()
+  ]);
+  const orders = ordersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  CACHE.radiologyTests = catalogSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const pending = orders.filter(o => o.status === 'pending');
+  const completed = orders.filter(o => o.status === 'ready');
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Radiology</h2>
+      <div class="flex gap-2">
+        <button onclick="radNewOrderModal()" class="btn btn-primary">+ New Imaging Order</button>
+        <button onclick="manageRadCatalog()" class="btn btn-secondary">⚙ Catalog</button>
+      </div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Pending (${pending.length})</h3>
+      ${pending.length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Study</th><th></th></tr></thead><tbody>
+        ${pending.map(o => {
+          const p = CACHE.patients.find(x => x.id === o.patientId);
+          return `<tr>
+            <td>${fmtDate(o.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc(o.study||'')} ${o.bodyPart?`· ${esc(o.bodyPart)}`:''}</td>
+            <td><button onclick="radReportModal('${o.id}')" class="text-blue-600 text-sm">Enter Report</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No pending imaging.</p>'}
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Completed</h3>
+      ${completed.length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Study</th><th></th></tr></thead><tbody>
+        ${completed.map(o => {
+          const p = CACHE.patients.find(x => x.id === o.patientId);
+          return `<tr>
+            <td>${fmtDate(o.completedAt||o.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc(o.study||'')}</td>
+            <td><button onclick="radReportView('${o.id}')" class="text-blue-600 text-sm">View</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No completed studies.</p>'}
+    </div>`;
+}
+
+function radSelectPatient(pid) { radNewOrderModal(pid); }
+
+function radNewOrderModal(pid) {
+  const studies = CACHE.radiologyTests;
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">New Imaging Order</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="ro_patient" class="input" placeholder="Type name…" ${pid ? 'disabled' : ''}>
+      <div id="ro_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div><label class="label">Study *</label>
+        ${studies.length ? `<select id="ro_study" class="input">
+          <option value="">— Select —</option>
+          ${studies.map(s => `<option value="${esc(s.name)}" data-price="${s.price||0}">${esc(s.name)}</option>`).join('')}
+        </select>` : '<input id="ro_study" class="input" placeholder="e.g. Ultrasound">'}
+      </div>
+      <div><label class="label">Body Part / Region</label><input id="ro_body" class="input" placeholder="e.g. Abdomen"></div>
+    </div>
+    <div class="mt-3"><label class="label">Clinical Indication</label><textarea id="ro_indication" class="input" rows="2"></textarea></div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveRadOrder()" class="btn btn-primary">Create Order</button>
+    </div>
+  `);
+  patientPicker('ro_patient', () => {});
+  if (pid) {
+    const p = CACHE.patients.find(x => x.id === pid);
+    if (p) { const inp = document.getElementById('ro_patient'); inp.value = patientName(p); inp.dataset.patientId = pid; }
+  }
+}
+
+async function saveRadOrder() {
+  const inp = document.getElementById('ro_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const studyEl = document.getElementById('ro_study');
+  const study = studyEl.value.trim();
+  if (!study) return toast('Select study', 'error');
+  const visit = await getOrCreateTodayVisit(patientId);
+  await db.collection('radiologyOrders').add({
+    patientId, visitId: visit.id, date: todayStr(),
+    study, bodyPart: document.getElementById('ro_body').value.trim(),
+    indication: document.getElementById('ro_indication').value.trim(),
+    status: 'pending',
+    orderedBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Imaging order created', 'success');
+  closeModal(); renderView('radiology');
+}
+
+async function radReportModal(orderId) {
+  const doc = await db.collection('radiologyOrders').doc(orderId).get();
+  const o = doc.data();
+  const p = CACHE.patients.find(x => x.id === o.patientId);
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">Imaging Report</h3>
+    <p class="text-sm text-gray-600 mb-3">Patient: <b>${esc(p ? patientName(p) : '—')}</b> · Study: <b>${esc(o.study)}</b> ${o.bodyPart?`(${esc(o.bodyPart)})`:''}</p>
+    ${o.indication ? `<p class="text-sm text-gray-500 mb-3"><b>Indication:</b> ${esc(o.indication)}</p>` : ''}
+    <div class="mb-3"><label class="label">Findings *</label><textarea id="rr_findings" class="input" rows="4">${esc(o.findings||'')}</textarea></div>
+    <div class="mb-3"><label class="label">Impression / Conclusion</label><textarea id="rr_impression" class="input" rows="2">${esc(o.impression||'')}</textarea></div>
+    <div class="flex justify-end gap-2">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveRadReport('${orderId}')" class="btn btn-primary">Save & Mark Ready</button>
+    </div>
+  `);
+}
+
+async function saveRadReport(orderId) {
+  const findings = document.getElementById('rr_findings').value.trim();
+  if (!findings) return toast('Findings required', 'error');
+  await db.collection('radiologyOrders').doc(orderId).update({
+    findings,
+    impression: document.getElementById('rr_impression').value.trim(),
+    status: 'ready',
+    completedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    completedBy: CURRENT_USER.uid
+  });
+  toast('Report saved', 'success');
+  closeModal(); renderView('radiology');
+}
+
+async function radReportView(orderId) {
+  const doc = await db.collection('radiologyOrders').doc(orderId).get();
+  const o = doc.data();
+  const p = CACHE.patients.find(x => x.id === o.patientId);
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Imaging Report</h3>
+      <div><button onclick="window.print()" class="btn btn-secondary text-sm">🖨 Print</button>
+      <button onclick="closeModal()" class="btn btn-secondary text-sm">Close</button></div>
+    </div>
+    <div id="printArea">
+      <div class="text-center mb-4"><h2 class="text-2xl font-bold">Clinic HMS</h2>
+      <p class="text-sm text-gray-500">Radiology Report</p></div>
+      <table class="mb-3"><tbody>
+        <tr><td><b>Patient:</b></td><td>${esc(p ? patientName(p) : '—')}</td>
+            <td><b>Date:</b></td><td>${fmtDate(o.completedAt||o.createdAt)}</td></tr>
+        <tr><td><b>Study:</b></td><td>${esc(o.study)} ${o.bodyPart?`— ${esc(o.bodyPart)}`:''}</td>
+            <td><b>Number:</b></td><td>${esc(p?.number||'')}</td></tr>
+      </tbody></table>
+      <p><b>Findings:</b></p><p class="whitespace-pre-wrap mb-3">${esc(o.findings||'')}</p>
+      <p><b>Impression:</b></p><p class="whitespace-pre-wrap">${esc(o.impression||'')}</p>
+    </div>
+  `);
+}
+
+async function manageRadCatalog() {
+  const snap = await db.collection('radiologyTests').orderBy('name').get();
+  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Radiology Catalog</h3>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+    <div class="flex gap-2 mb-3">
+      <input id="rc_name" class="input" placeholder="Study (e.g. Ultrasound Abdomen)">
+      <input id="rc_price" type="number" class="input" placeholder="KES" style="max-width:100px">
+      <button onclick="addRadTest()" class="btn btn-primary">Add</button>
+    </div>
+    <table><thead><tr><th>Study</th><th>Price</th><th></th></tr></thead><tbody>
+      ${items.map(t => `<tr>
+        <td>${esc(t.name)}</td><td>${t.price||0}</td>
+        <td><button onclick="delRadTest('${t.id}')" class="text-red-600 text-sm">Delete</button></td>
+      </tr>`).join('')}
+    </tbody></table>
+  `);
+}
+async function addRadTest() {
+  const name = document.getElementById('rc_name').value.trim();
+  if (!name) return;
+  await db.collection('radiologyTests').add({
+    name, price: parseFloat(document.getElementById('rc_price').value)||0,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Added'); manageRadCatalog();
+}
+async function delRadTest(id) {
+  if (!confirm('Delete?')) return;
+  await db.collection('radiologyTests').doc(id).delete();
+  manageRadCatalog();
+}
+// ============================================================
+// PHARMACY MODULE
+// ============================================================
+const PAYMENT_MODES = ['Cash', 'Mpesa', 'SHA', 'Insurance', 'Bank Transfer', 'Card'];
+
+async function viewPharmacy(c) {
+  const [drugsSnap, rxSnap] = await Promise.all([
+    db.collection('drugs').orderBy('name').get(),
+    db.collection('prescriptions').orderBy('createdAt','desc').limit(100).get()
+  ]);
+  CACHE.drugs = drugsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const rxs = rxSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const pending = rxs.filter(r => r.status === 'pending');
+  const dispensed = rxs.filter(r => r.status === 'dispensed');
+  const lowStock = CACHE.drugs.filter(d => (d.stock||0) <= (d.reorder||0));
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Pharmacy</h2>
+      <div class="flex gap-2">
+        <button onclick="pharmPrescribeModal()" class="btn btn-primary">+ New Prescription</button>
+        <button onclick="manageDrugCatalog()" class="btn btn-secondary">⚙ Drug Catalog</button>
+      </div>
+    </div>
+
+    ${lowStock.length ? `<div class="card p-3 mb-4 bg-red-50 border border-red-200">
+      <b class="text-red-700">⚠ Low stock:</b>
+      <span class="text-sm">${lowStock.map(d => `${esc(d.name)} (${d.stock||0})`).join(', ')}</span>
+    </div>` : ''}
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Pending Prescriptions (${pending.length})</h3>
+      ${pending.length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th><th></th></tr></thead><tbody>
+        ${pending.map(r => {
+          const p = CACHE.patients.find(x => x.id === r.patientId);
+          return `<tr>
+            <td>${fmtDate(r.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc((r.items||[]).map(i=>`${i.name} x${i.qty}`).join(', '))}</td>
+            <td><button onclick="dispenseModal('${r.id}')" class="text-blue-600 text-sm">Dispense</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No pending prescriptions.</p>'}
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Recently Dispensed</h3>
+      ${dispensed.length ? `<table><thead><tr><th>Date</th><th>Patient</th><th>Items</th></tr></thead><tbody>
+        ${dispensed.slice(0,20).map(r => {
+          const p = CACHE.patients.find(x => x.id === r.patientId);
+          return `<tr>
+            <td>${fmtDate(r.dispensedAt||r.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : '—')}</td>
+            <td>${esc((r.items||[]).map(i=>`${i.name} x${i.qty}`).join(', '))}</td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">None.</p>'}
+    </div>`;
+}
+
+function pharmSelectPatient(pid) { pharmPrescribeModal(pid); }
+
+function pharmPrescribeModal(pid) {
+  const drugs = CACHE.drugs;
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">New Prescription</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="pp_patient" class="input" placeholder="Type name…" ${pid ? 'disabled' : ''}>
+      <div id="pp_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+
+    <div id="pp_items" class="space-y-2 mb-3"></div>
+    <button onclick="addRxItem()" class="btn btn-secondary text-sm mb-3">+ Add Drug</button>
+
+    <div class="mb-3"><label class="label">Notes</label><textarea id="pp_notes" class="input" rows="2"></textarea></div>
+
+    <div class="flex justify-end gap-2">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="savePrescription()" class="btn btn-primary">Save Prescription</button>
+    </div>
+  `, 'max-w-3xl');
+  patientPicker('pp_patient', () => {});
+  if (pid) {
+    const p = CACHE.patients.find(x => x.id === pid);
+    if (p) { const inp = document.getElementById('pp_patient'); inp.value = patientName(p); inp.dataset.patientId = pid; }
+  }
+  addRxItem();
+}
+
+function addRxItem() {
+  const wrap = document.getElementById('pp_items');
+  const id = 'rx_' + Date.now() + Math.random().toString(36).slice(2,6);
+  const drugs = CACHE.drugs;
+  wrap.appendChild(el(`<div class="grid grid-cols-12 gap-2 items-end" id="${id}">
+    <div class="col-span-6">
+      <label class="label">Drug</label>
+      ${drugs.length ? `<select class="input rx-drug" onchange="rxDrugChange(this)">
+        <option value="">— Select drug —</option>
+        ${drugs.map(d => `<option value="${d.id}" data-name="${esc(d.name)}" data-price="${d.price||0}" data-stock="${d.stock||0}">${esc(d.name)} ${d.strength?'· '+esc(d.strength):''}</option>`).join('')}
+      </select>` : '<input class="input rx-drug-name" placeholder="Type drug name">'}
+    </div>
+    <div class="col-span-2"><label class="label">Qty</label><input type="number" class="input rx-qty" value="1" min="1"></div>
+    <div class="col-span-3"><label class="label">Dosage / Frequency</label><input class="input rx-sig" placeholder="e.g. 1 tab TID x 5d"></div>
+    <div class="col-span-1"><button onclick="document.getElementById('${id}').remove()" class="btn btn-danger w-full">×</button></div>
+  </div>`));
+}
+
+function rxDrugChange(sel) {
+  // Reserved for future use
+}
+
+async function savePrescription() {
+  const inp = document.getElementById('pp_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const rows = [...document.querySelectorAll('#pp_items > div')];
+  const items = rows.map(r => {
+    const sel = r.querySelector('.rx-drug');
+    const nameInp = r.querySelector('.rx-drug-name');
+    const qty = parseInt(r.querySelector('.rx-qty').value) || 0;
+    const sig = r.querySelector('.rx-sig').value.trim();
+    let name = '', price = 0, drugId = null;
+    if (sel) {
+      const opt = sel.options[sel.selectedIndex];
+      if (!opt || !opt.value) return null;
+      name = opt.dataset.name;
+      price = parseFloat(opt.dataset.price) || 0;
+      drugId = opt.value;
+    } else {
+      name = (nameInp?.value || '').trim();
+      if (!name) return null;
+    }
+    return { drugId, name, qty, sig, price, total: price * qty };
+  }).filter(Boolean);
+  if (!items.length) return toast('Add at least one drug', 'error');
+
+  const visit = await getOrCreateTodayVisit(patientId);
+  await db.collection('prescriptions').add({
+    patientId, visitId: visit.id, date: todayStr(),
+    items, notes: document.getElementById('pp_notes').value.trim(),
+    status: 'pending',
+    prescriberId: CURRENT_USER.uid,
+    prescriberName: CURRENT_USER.name || CURRENT_USER.email,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Prescription saved', 'success');
+  closeModal(); renderView('pharmacy');
+}
+
+async function dispenseModal(rxId) {
+  const doc = await db.collection('prescriptions').doc(rxId).get();
+  const r = doc.data();
+  const p = CACHE.patients.find(x => x.id === r.patientId);
+  openModal(`
+    <h3 class="text-xl font-bold mb-3">Dispense Prescription</h3>
+    <p class="text-sm text-gray-600 mb-3">Patient: <b>${esc(p ? patientName(p) : '—')}</b></p>
+    <table class="mb-3"><thead><tr><th>Drug</th><th>Qty</th><th>Sig</th><th>In stock</th></tr></thead><tbody>
+      ${(r.items||[]).map(i => {
+        const d = CACHE.drugs.find(x => x.id === i.drugId);
+        return `<tr><td>${esc(i.name)}</td><td>${i.qty}</td><td>${esc(i.sig||'')}</td>
+          <td>${d ? (d.stock||0) : '—'}</td></tr>`;
+      }).join('')}
+    </tbody></table>
+    <div class="flex justify-end gap-2">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="confirmDispense('${rxId}')" class="btn btn-primary">Confirm Dispense</button>
+    </div>
+  `);
+}
+
+async function confirmDispense(rxId) {
+  const doc = await db.collection('prescriptions').doc(rxId).get();
+  const r = doc.data();
+  const batch = db.batch();
+  for (const item of r.items || []) {
+    if (!item.drugId) continue;
+    const dref = db.collection('drugs').doc(item.drugId);
+    const ds = await dref.get();
+    if (!ds.exists) continue;
+    const cur = ds.data().stock || 0;
+    batch.update(dref, { stock: Math.max(0, cur - item.qty) });
+  }
+  batch.update(db.collection('prescriptions').doc(rxId), {
+    status: 'dispensed',
+    dispensedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    dispensedBy: CURRENT_USER.uid
+  });
+  await batch.commit();
+  toast('Dispensed', 'success');
+  closeModal(); renderView('pharmacy');
+}
+
+async function manageDrugCatalog() {
+  const snap = await db.collection('drugs').orderBy('name').get();
+  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Drug Catalog</h3>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+    <div class="grid grid-cols-5 gap-2 mb-3">
+      <input id="dc_name" class="input col-span-2" placeholder="Name">
+      <input id="dc_strength" class="input" placeholder="Strength">
+      <input id="dc_price" type="number" class="input" placeholder="Price">
+      <input id="dc_stock" type="number" class="input" placeholder="Stock">
+    </div>
+    <div class="grid grid-cols-5 gap-2 mb-3">
+      <input id="dc_form" class="input" placeholder="Form (tab/syr)">
+      <input id="dc_reorder" type="number" class="input" placeholder="Reorder lvl">
+      <button onclick="addDrug()" class="btn btn-primary col-span-3">+ Add Drug</button>
+    </div>
+    <div class="max-h-96 overflow-y-auto">
+    <table><thead><tr><th>Name</th><th>Form</th><th>Strength</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>
+      ${items.map(d => `<tr>
+        <td>${esc(d.name)}</td><td>${esc(d.form||'')}</td><td>${esc(d.strength||'')}</td>
+        <td>${d.price||0}</td><td>${d.stock||0}</td>
+        <td>
+          <button onclick="restockDrug('${d.id}')" class="text-blue-600 text-sm">Restock</button>
+          <button onclick="delDrug('${d.id}')" class="text-red-600 text-sm ml-2">Delete</button>
+        </td>
+      </tr>`).join('')}
+    </tbody></table>
+    </div>
+  `, 'max-w-4xl');
+}
+
+async function addDrug() {
+  const name = document.getElementById('dc_name').value.trim();
+  if (!name) return toast('Name required', 'error');
+  await db.collection('drugs').add({
+    name,
+    form: document.getElementById('dc_form').value.trim(),
+    strength: document.getElementById('dc_strength').value.trim(),
+    price: parseFloat(document.getElementById('dc_price').value)||0,
+    stock: parseInt(document.getElementById('dc_stock').value)||0,
+    reorder: parseInt(document.getElementById('dc_reorder').value)||0,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Drug added'); manageDrugCatalog();
+}
+
+async function restockDrug(id) {
+  const qty = prompt('Quantity to add:');
+  if (!qty || isNaN(qty)) return;
+  const dref = db.collection('drugs').doc(id);
+  const ds = await dref.get();
+  await dref.update({ stock: (ds.data().stock||0) + parseInt(qty) });
+  toast('Restocked'); manageDrugCatalog();
+}
+
+async function delDrug(id) {
+  if (!confirm('Delete drug?')) return;
+  await db.collection('drugs').doc(id).delete();
+  manageDrugCatalog();
+}
+
+// ============================================================
+// ORTHOPEDICS MODULE
+// ============================================================
+async function viewOrthopedics(c) {
+  const snap = await db.collection('orthoCases').orderBy('createdAt','desc').get();
+  const cases = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Orthopedics</h2>
+      <button onclick="orthoNewCaseModal()" class="btn btn-primary">+ New Case</button>
+    </div>
+    <div class="card p-4">
+      ${cases.length ? `<table><thead><tr>
+        <th>Date</th><th>Patient</th><th>Injury</th><th>Procedure</th><th>Next follow-up</th><th></th>
+      </tr></thead><tbody>
+      ${cases.map(x => {
+        const p = CACHE.patients.find(y => y.id === x.patientId);
+        return `<tr>
+          <td>${fmtDate(x.createdAt)}</td>
+          <td>${esc(p ? patientName(p) : '—')}</td>
+          <td>${esc(x.injury||'')}</td>
+          <td>${esc(x.procedure||'')}</td>
+          <td>${esc(x.followUp||'—')}</td>
+          <td><button onclick="orthoViewCase('${x.id}')" class="text-blue-600 text-sm">Open</button></td>
+        </tr>`;
+      }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No orthopedic cases yet.</p>'}
+    </div>`;
+}
+
+function orthoSelectPatient(pid) { orthoNewCaseModal(pid); }
+
+function orthoNewCaseModal(pid) {
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">New Orthopedic Case</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="oc_patient" class="input" placeholder="Type name…" ${pid?'disabled':''}>
+      <div id="oc_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div class="col-span-2"><label class="label">Mechanism of Injury</label><textarea id="oc_mech" class="input" rows="2"></textarea></div>
+      <div><label class="label">Injury / Diagnosis</label><input id="oc_injury" class="input" placeholder="e.g. Closed fracture right radius"></div>
+      <div><label class="label">Side / Region</label><input id="oc_region" class="input" placeholder="e.g. Right forearm"></div>
+      <div><label class="label">Procedure</label>
+        <select id="oc_procedure" class="input">
+          <option value="">— Select —</option>
+          <option>POP Cast</option><option>Backslab</option><option>Skin Traction</option>
+          <option>Closed Reduction</option><option>Open Reduction</option><option>Wound Dressing</option>
+          <option>Joint Aspiration</option><option>Physiotherapy Referral</option><option>Other</option>
+        </select>
+      </div>
+      <div><label class="label">Anesthesia</label>
+        <select id="oc_anesthesia" class="input">
+          <option value="">—</option><option>None</option><option>Local</option><option>Regional</option><option>General</option>
+        </select>
+      </div>
+      <div><label class="label">Next Follow-up</label><input id="oc_followup" type="date" class="input"></div>
+      <div class="col-span-2"><label class="label">Clinical Notes</label><textarea id="oc_notes" class="input" rows="3"></textarea></div>
+    </div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveOrthoCase()" class="btn btn-primary">Save Case</button>
+    </div>
+  `);
+  patientPicker('oc_patient', () => {});
+  if (pid) {
+    const p = CACHE.patients.find(x => x.id === pid);
+    if (p) { const inp = document.getElementById('oc_patient'); inp.value = patientName(p); inp.dataset.patientId = pid; }
+  }
+}
+
+async function saveOrthoCase() {
+  const inp = document.getElementById('oc_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const visit = await getOrCreateTodayVisit(patientId);
+  await db.collection('orthoCases').add({
+    patientId, visitId: visit.id, date: todayStr(),
+    mechanism: document.getElementById('oc_mech').value.trim(),
+    injury: document.getElementById('oc_injury').value.trim(),
+    region: document.getElementById('oc_region').value.trim(),
+    procedure: document.getElementById('oc_procedure').value,
+    anesthesia: document.getElementById('oc_anesthesia').value,
+    followUp: document.getElementById('oc_followup').value,
+    notes: document.getElementById('oc_notes').value.trim(),
+    doctorId: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Case saved', 'success'); closeModal(); renderView('orthopedics');
+}
+
+async function orthoViewCase(id) {
+  const doc = await db.collection('orthoCases').doc(id).get();
+  const x = doc.data();
+  const p = CACHE.patients.find(y => y.id === x.patientId);
+  const rows = ['mechanism','injury','region','procedure','anesthesia','followUp','notes']
+    .map(k => `<tr><td class="font-medium capitalize">${k}</td><td>${esc(x[k]||'—')}</td></tr>`).join('');
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Ortho Case — ${esc(p ? patientName(p) : '')}</h3>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+    <table><tbody>${rows}</tbody></table>
+  `);
+}
+
+// ============================================================
+// PAYMENTS MODULE
+// ============================================================
+async function viewPayments(c) {
+  const today = todayStr();
+  const [todaySnap, recentSnap] = await Promise.all([
+    db.collection('payments').where('date','==',today).get(),
+    db.collection('payments').orderBy('createdAt','desc').limit(50).get()
+  ]);
+  const todayPays = todaySnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const byMode = {};
+  todayPays.forEach(p => { byMode[p.mode] = (byMode[p.mode]||0) + (p.amount||0); });
+  const total = todayPays.reduce((s,p) => s + (p.amount||0), 0);
+  const recent = recentSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Payments</h2>
+      <button onclick="payNewModal()" class="btn btn-primary">+ Record Payment</button>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="card p-3"><div class="text-xs text-gray-500">Today Total</div>
+        <div class="text-2xl font-bold">KES ${total.toLocaleString()}</div></div>
+      ${PAYMENT_MODES.slice(0,3).map(m => `<div class="card p-3">
+        <div class="text-xs text-gray-500">${m}</div>
+        <div class="text-2xl font-bold">KES ${(byMode[m]||0).toLocaleString()}</div>
+      </div>`).join('')}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Today's Payments (${todayPays.length})</h3>
+      ${todayPays.length ? `<table><thead><tr>
+        <th>Time</th><th>Patient</th><th>Mode</th><th>Ref</th><th>Amount</th><th></th>
+      </tr></thead><tbody>
+        ${todayPays.map(p => {
+          const pt = CACHE.patients.find(x => x.id === p.patientId);
+          return `<tr>
+            <td>${fmtDate(p.createdAt)}</td>
+            <td>${esc(pt ? patientName(pt) : '—')}</td>
+            <td>${esc(p.mode)}</td>
+            <td>${esc(p.mpesaCode||p.shaRef||p.receipt||'')}</td>
+            <td><b>KES ${(p.amount||0).toLocaleString()}</b></td>
+            <td><button onclick="printReceipt('${p.id}')" class="text-blue-600 text-sm">Receipt</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No payments today.</p>'}
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Recent Payments</h3>
+      <table><thead><tr><th>Date</th><th>Patient</th><th>Mode</th><th>Amount</th><th></th></tr></thead><tbody>
+        ${recent.map(p => {
+          const pt = CACHE.patients.find(x => x.id === p.patientId);
+          return `<tr>
+            <td>${fmtDate(p.createdAt)}</td>
+            <td>${esc(pt ? patientName(pt) : '—')}</td>
+            <td>${esc(p.mode)}</td>
+            <td>KES ${(p.amount||0).toLocaleString()}</td>
+            <td><button onclick="printReceipt('${p.id}')" class="text-blue-600 text-sm">Receipt</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>
+    </div>`;
+}
+
+function paySelectPatient(pid) { payNewModal(pid); }
+
+function payNewModal(pid) {
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">Record Payment</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="pay_patient" class="input" placeholder="Type name…" ${pid?'disabled':''}>
+      <div id="pay_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+
+    <h4 class="font-semibold text-sm mb-1">Bill items</h4>
+    <div id="pay_items" class="space-y-2 mb-2"></div>
+    <button onclick="addPayItem()" class="btn btn-secondary text-sm mb-3">+ Add Item</button>
+
+    <div class="bg-gray-50 p-3 rounded mb-3 flex justify-between">
+      <b>Total:</b><b id="pay_total">KES 0</b>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div><label class="label">Payment Mode *</label>
+        <select id="pay_mode" class="input" onchange="payModeChange()">
+          ${PAYMENT_MODES.map(m => `<option>${m}</option>`).join('')}
+        </select>
+      </div>
+      <div><label class="label">Amount Paid *</label><input id="pay_amount" type="number" class="input" oninput="payUpdateTotal()"></div>
+      <div id="pay_mpesa_wrap" class="hidden"><label class="label">Mpesa Code</label><input id="pay_mpesa" class="input" placeholder="e.g. QBC123XYZ"></div>
+      <div id="pay_sha_wrap" class="hidden col-span-2 grid grid-cols-2 gap-3">
+        <div><label class="label">SHA Member No.</label><input id="pay_sha_member" class="input"></div>
+        <div><label class="label">SHA Claim Ref</label><input id="pay_sha_ref" class="input"></div>
+      </div>
+      <div class="col-span-2"><label class="label">Notes</label><input id="pay_notes" class="input"></div>
+    </div>
+
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="savePayment()" class="btn btn-primary">Save & Print Receipt</button>
+    </div>
+  `, 'max-w-2xl');
+  patientPicker('pay_patient', () => {});
+  if (pid) {
+    const p = CACHE.patients.find(x => x.id === pid);
+    if (p) { const inp = document.getElementById('pay_patient'); inp.value = patientName(p); inp.dataset.patientId = pid; }
+  }
+  addPayItem();
+  payModeChange();
+}
+
+function addPayItem() {
+  const wrap = document.getElementById('pay_items');
+  const id = 'pi_' + Date.now() + Math.random().toString(36).slice(2,5);
+  wrap.appendChild(el(`<div class="grid grid-cols-12 gap-2" id="${id}">
+    <input class="input col-span-6 pay-item-desc" placeholder="Description (e.g. Consultation)">
+    <input type="number" class="input col-span-3 pay-item-amt" placeholder="Amount" oninput="payUpdateTotal()">
+    <button onclick="document.getElementById('${id}').remove();payUpdateTotal()" class="btn btn-danger col-span-1">×</button>
+  </div>`));
+}
+
+function payUpdateTotal() {
+  const total = [...document.querySelectorAll('.pay-item-amt')].reduce((s,i) => s + (parseFloat(i.value)||0), 0);
+  document.getElementById('pay_total').textContent = 'KES ' + total.toLocaleString();
+  const amt = document.getElementById('pay_amount');
+  if (!amt.value) amt.value = total;
+}
+
+function payModeChange() {
+  const m = document.getElementById('pay_mode').value;
+  document.getElementById('pay_mpesa_wrap').classList.toggle('hidden', m !== 'Mpesa');
+  document.getElementById('pay_sha_wrap').classList.toggle('hidden', m !== 'SHA');
+}
+
+async function savePayment() {
+  const inp = document.getElementById('pay_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const items = [...document.querySelectorAll('#pay_items > div')].map(r => ({
+    desc: r.querySelector('.pay-item-desc').value.trim(),
+    amount: parseFloat(r.querySelector('.pay-item-amt').value)||0
+  })).filter(i => i.desc && i.amount);
+  const amount = parseFloat(document.getElementById('pay_amount').value)||0;
+  if (!amount) return toast('Enter amount', 'error');
+  const mode = document.getElementById('pay_mode').value;
+  const receiptNo = 'R' + Date.now().toString().slice(-8);
+  const visit = await getOrCreateTodayVisit(patientId);
+  const data = {
+    patientId, visitId: visit.id, date: todayStr(),
+    items, amount, mode, receipt: receiptNo,
+    mpesaCode: document.getElementById('pay_mpesa')?.value.trim() || '',
+    shaMember: document.getElementById('pay_sha_member')?.value.trim() || '',
+    shaRef: document.getElementById('pay_sha_ref')?.value.trim() || '',
+    notes: document.getElementById('pay_notes').value.trim(),
+    receivedBy: CURRENT_USER.uid,
+    receivedByName: CURRENT_USER.name || CURRENT_USER.email,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const ref = await db.collection('payments').add(data);
+  toast('Payment recorded', 'success');
+  closeModal(); renderView('payments');
+  setTimeout(() => printReceipt(ref.id), 300);
+}
+
+async function printReceipt(paymentId) {
+  const doc = await db.collection('payments').doc(paymentId).get();
+  const p = doc.data();
+  const pt = CACHE.patients.find(x => x.id === p.patientId);
+  const html = `
+    <div id="printArea" style="font-family:monospace;max-width:340px;margin:auto">
+      <div class="text-center"><h3 style="margin:0">Clinic HMS</h3>
+      <div style="font-size:12px">Official Receipt</div></div>
+      <hr>
+      <div style="font-size:12px">
+        Receipt: <b>${esc(p.receipt)}</b><br>
+        Date: ${fmtDate(p.createdAt)}<br>
+        Patient: ${esc(pt ? patientName(pt) : '—')}<br>
+        Number: ${esc(pt?.number||'')}<br>
+        Mode: <b>${esc(p.mode)}</b>
+        ${p.mpesaCode ? `<br>Mpesa: ${esc(p.mpesaCode)}` : ''}
+        ${p.shaMember ? `<br>SHA Member: ${esc(p.shaMember)}<br>SHA Ref: ${esc(p.shaRef||'')}` : ''}
+      </div>
+      <hr>
+      <table style="width:100%;font-size:12px">
+        <thead><tr><th align="left">Item</th><th align="right">Amount</th></tr></thead>
+        <tbody>
+          ${(p.items||[]).map(i => `<tr><td>${esc(i.desc)}</td><td align="right">${i.amount.toLocaleString()}</td></tr>`).join('')}
+        </tbody>
+      </table>
+      <hr>
+      <div style="text-align:right;font-size:14px"><b>Total: KES ${(p.amount||0).toLocaleString()}</b></div>
+      <hr>
+      <div style="font-size:11px;text-align:center">Served by ${esc(p.receivedByName||'')}<br>Thank you!</div>
+    </div>
+    <div class="flex justify-end gap-2 mt-4 no-print">
+      <button onclick="window.print()" class="btn btn-primary">🖨 Print</button>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>`;
+  openModal(html, 'max-w-md');
+}
+
+// ============================================================
+// ADMIN MODULE
+// ============================================================
+async function viewAdmin(c) {
+  const [usersSnap, patSnap, visSnap, paySnap] = await Promise.all([
+    db.collection('users').get(),
+    db.collection('patients').get(),
+    db.collection('visits').get(),
+    db.collection('payments').get()
+  ]);
+  const users = usersSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const totalRevenue = paySnap.docs.reduce((s,d) => s + (d.data().amount||0), 0);
+
+  c.innerHTML = `
+    <h2 class="text-2xl font-bold mb-4">Admin</h2>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="card p-3"><div class="text-xs text-gray-500">Total Patients</div>
+        <div class="text-2xl font-bold">${patSnap.size}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Total Visits</div>
+        <div class="text-2xl font-bold">${visSnap.size}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Total Revenue</div>
+        <div class="text-2xl font-bold">KES ${totalRevenue.toLocaleString()}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Staff Accounts</div>
+        <div class="text-2xl font-bold">${users.length}</div></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Staff & Roles</h3>
+      <p class="text-xs text-gray-500 mb-3">To add staff: Firebase Console → Authentication → Users → Add user. Then assign a role here.</p>
+      <table><thead><tr><th>Name / Email</th><th>Role</th><th>Change role</th></tr></thead><tbody>
+        ${users.map(u => `<tr>
+          <td>${esc(u.name||u.email||u.id)}<br><span class="text-xs text-gray-500">${esc(u.email||'')}</span></td>
+          <td>${esc(u.role||'pending')}</td>
+          <td>
+            <select onchange="changeRole('${u.id}', this.value)" class="input" style="width:auto">
+              ${['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier','pending']
+                .map(r => `<option ${u.role===r?'selected':''}>${r}</option>`).join('')}
+            </select>
+          </td>
+        </tr>`).join('')}
+      </tbody></table>
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">Catalogs</h3>
+      <div class="flex flex-wrap gap-2">
+        <button onclick="manageDrugCatalog()" class="btn btn-secondary">💊 Drug Catalog</button>
+        <button onclick="manageLabCatalog()" class="btn btn-secondary">🔬 Lab Tests</button>
+        <button onclick="manageRadCatalog()" class="btn btn-secondary">🩻 Radiology Tests</button>
+      </div>
+    </div>`;
+}
+
+async function changeRole(uid, role) {
+  await db.collection('users').doc(uid).update({ role });
+  toast('Role updated', 'success');
+}
+</script>
+</body>
+</html>
