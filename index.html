@@ -153,6 +153,7 @@ const NAV_ITEMS = [
   { key: 'dashboard',     label: 'Dashboard',     roles: ['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier'] },
   { key: 'patients',      label: 'Patients',      roles: ['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier'] },
   { key: 'appointments', label: 'Appointments', roles: ['admin','doctor','nurse','reception','cashier'] },
+  { key: 'queue', label: 'Queue', roles: ['admin','doctor','nurse','reception','cashier'] },
   { key: 'nurse',         label: 'Nurse / Triage',roles: ['admin','nurse','doctor'] },
   { key: 'consultation',  label: 'Consultation',  roles: ['admin','doctor'] },
   { key: 'referral',       label: 'Referral',        roles: ['admin','doctor'] },
@@ -238,6 +239,7 @@ async function renderView(key) {
     if (key === 'dashboard')    await viewDashboard(c);
     else if (key === 'patients')    await viewPatients(c);
     else if (key === 'appointments') await viewAppointments(c);  
+    else if (key === 'queue') await viewQueue(c);  
     else if (key === 'nurse')       await viewNurse(c);
     else if (key === 'consultation')await viewConsultation(c);
     else if (key === 'referral')    await viewReferral(c);  
@@ -1794,6 +1796,233 @@ function printApptSchedule() {
     </style></head><body>
       <h1>StraightUpMedical</h1>
       <p class="sub">Appointment Schedule — ${APPT_DATE}</p>
+      ${el.innerHTML}
+    </body></html>
+  `);
+  w.document.close();
+  w.print();
+}
+  // ============================================================
+// QUEUE MODULE
+// ============================================================
+async function viewQueue(c) {
+  await refreshPatients();
+  const today = todayStr();
+  const snap = await db.collection('queue').where('date','==',today).get();
+  const tokens = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .sort((a,b) => (a.tokenNumber||0) - (b.tokenNumber||0));
+
+  const waiting = tokens.filter(t => t.status === 'waiting');
+  const inProgress = tokens.filter(t => t.status === 'in-consultation');
+  const done = tokens.filter(t => t.status === 'done');
+  const skipped = tokens.filter(t => t.status === 'no-show');
+
+  const renderRow = (t, showActions) => {
+    const p = CACHE.patients.find(x => x.id === t.patientId);
+    const minutes = t.createdAt?.toDate ? Math.floor((Date.now() - t.createdAt.toDate().getTime()) / 60000) : '';
+    const statusColor = t.status === 'waiting' ? 'bg-yellow-100 text-yellow-700' :
+                        t.status === 'in-consultation' ? 'bg-blue-100 text-blue-700' :
+                        t.status === 'done' ? 'bg-green-100 text-green-700' :
+                        'bg-gray-200 text-gray-700';
+    return `<tr>
+      <td><b class="text-lg">T${String(t.tokenNumber||0).padStart(3,'0')}</b></td>
+      <td>${esc(p ? patientName(p) : t.patientName || '—')}<br>
+          <span class="text-xs text-gray-500">${esc(p?.number||'')} · ${esc(p?.phone||'')}</span></td>
+      <td class="text-xs text-gray-500">${t.createdAt ? fmtDate(t.createdAt) : ''}${minutes!==''?`<br>${minutes} min ago`:''}</td>
+      <td><span class="badge ${statusColor}">${esc(t.status)}</span></td>
+      <td class="whitespace-nowrap">
+        ${showActions && t.status === 'waiting' ? `
+          <button onclick="queueStart('${t.id}')" class="text-blue-600 text-sm">Start</button>
+          <button onclick="queueNoShow('${t.id}')" class="text-gray-500 text-sm ml-2">No-show</button>
+        ` : ''}
+        ${showActions && t.status === 'in-consultation' ? `
+          <button onclick="queueDone('${t.id}')" class="text-green-600 text-sm">Done</button>
+        ` : ''}
+        <button onclick="queuePrint('${t.id}')" class="text-gray-500 text-sm ml-2">Print</button>
+      </td>
+    </tr>`;
+  };
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+      <h2 class="text-2xl font-bold">Queue — ${fmtDate(new Date())}</h2>
+      <div class="flex gap-2">
+        <button onclick="newQueueToken()" class="btn btn-primary">+ New Token</button>
+        <button onclick="printQueueBoard()" class="btn btn-secondary">🖨 Print Queue</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="card p-3 text-yellow-700 bg-yellow-50"><div class="text-xs">Waiting</div><div class="text-2xl font-bold">${waiting.length}</div></div>
+      <div class="card p-3 text-blue-700 bg-blue-50"><div class="text-xs">In Consultation</div><div class="text-2xl font-bold">${inProgress.length}</div></div>
+      <div class="card p-3 text-green-700 bg-green-50"><div class="text-xs">Done</div><div class="text-2xl font-bold">${done.length}</div></div>
+      <div class="card p-3 text-gray-700 bg-gray-100"><div class="text-xs">No-show</div><div class="text-2xl font-bold">${skipped.length}</div></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2 text-yellow-700">Waiting (${waiting.length})</h3>
+      ${waiting.length ? `<table><thead><tr><th>Token</th><th>Patient</th><th>Waiting since</th><th>Status</th><th></th></tr></thead><tbody>
+        ${waiting.map(t => renderRow(t, true)).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No one waiting.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2 text-blue-700">In Consultation (${inProgress.length})</h3>
+      ${inProgress.length ? `<table><thead><tr><th>Token</th><th>Patient</th><th>Started</th><th>Status</th><th></th></tr></thead><tbody>
+        ${inProgress.map(t => renderRow(t, true)).join('')}
+      </tbody></table>` : '<p class="text-gray-400">None.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2 text-green-700">Done Today (${done.length})</h3>
+      ${done.length ? `<div class="max-h-64 overflow-y-auto"><table><thead><tr><th>Token</th><th>Patient</th><th>Seen</th><th>Status</th><th></th></tr></thead><tbody>
+        ${done.map(t => renderRow(t, false)).join('')}
+      </tbody></table></div>` : '<p class="text-gray-400">None yet.</p>'}
+    </div>
+
+    ${skipped.length ? `<div class="card p-4">
+      <h3 class="font-semibold mb-2 text-gray-500">No-show (${skipped.length})</h3>
+      <table><thead><tr><th>Token</th><th>Patient</th><th>—</th><th>Status</th><th></th></tr></thead><tbody>
+        ${skipped.map(t => renderRow(t, false)).join('')}
+      </tbody></table>
+    </div>` : ''}
+  `;
+}
+
+async function nextQueueNumber() {
+  const today = todayStr();
+  const snap = await db.collection('queue').where('date','==',today).get();
+  const nums = snap.docs.map(d => d.data().tokenNumber || 0);
+  const max = nums.length ? Math.max(...nums) : 0;
+  return max + 1;
+}
+
+async function newQueueToken() {
+  await refreshPatients();
+  const nextNum = await nextQueueNumber();
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">New Token</h3>
+    <div class="text-center mb-4">
+      <div class="text-xs text-gray-500">Next token number</div>
+      <div class="text-4xl font-bold text-blue-700">T${String(nextNum).padStart(3,'0')}</div>
+    </div>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="q_patient" class="input" placeholder="Type name…">
+      <div id="q_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+    <div class="mb-3">
+      <label class="label">Reason / Complaint (optional)</label>
+      <input id="q_reason" class="input" placeholder="e.g. Fever, follow-up">
+    </div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveQueueToken()" class="btn btn-primary">Assign Token</button>
+    </div>
+  `, 'max-w-md');
+  patientPicker('q_patient', () => {});
+}
+
+async function saveQueueToken() {
+  const inp = document.getElementById('q_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const p = CACHE.patients.find(x => x.id === patientId);
+  const tokenNumber = await nextQueueNumber();
+  const ref = await db.collection('queue').add({
+    patientId,
+    patientName: p ? patientName(p) : inp.value.trim(),
+    tokenNumber,
+    reason: document.getElementById('q_reason').value.trim(),
+    status: 'waiting',
+    date: todayStr(),
+    createdBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast(`Token T${String(tokenNumber).padStart(3,'0')} assigned`, 'success');
+  closeModal();
+  renderView('queue');
+  setTimeout(() => queuePrint(ref.id), 300);
+}
+
+async function queueStart(id) {
+  await db.collection('queue').doc(id).update({
+    status: 'in-consultation',
+    startedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    startedBy: CURRENT_USER.uid
+  });
+  toast('Started', 'success');
+  renderView('queue');
+}
+
+async function queueDone(id) {
+  await db.collection('queue').doc(id).update({
+    status: 'done',
+    doneAt: firebase.firestore.FieldValue.serverTimestamp(),
+    doneBy: CURRENT_USER.uid
+  });
+  toast('Marked done', 'success');
+  renderView('queue');
+}
+
+async function queueNoShow(id) {
+  if (!confirm('Mark this patient as no-show?')) return;
+  await db.collection('queue').doc(id).update({
+    status: 'no-show',
+    skippedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    skippedBy: CURRENT_USER.uid
+  });
+  toast('Marked no-show', 'info');
+  renderView('queue');
+}
+
+async function queuePrint(id) {
+  const doc = await db.collection('queue').doc(id).get();
+  if (!doc.exists) return toast('Token not found', 'error');
+  const t = doc.data();
+  const p = CACHE.patients.find(x => x.id === t.patientId);
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Queue Token</h3>
+      <div><button onclick="window.print()" class="btn btn-primary text-sm">🖨 Print</button>
+      <button onclick="closeModal()" class="btn btn-secondary text-sm">Close</button></div>
+    </div>
+    <div id="printArea" style="font-family:monospace;max-width:340px;margin:auto;text-align:center;padding:1rem;border:2px dashed #333">
+      <img src="logo.png" alt="Logo" style="max-width:100px;margin-bottom:.3rem">
+      <div style="font-size:12px"><b>StraightUpMedical</b></div>
+      <div style="font-size:11px;color:#555">Queue Token</div>
+      <hr>
+      <div style="font-size:12px">Date: ${todayStr()}</div>
+      <div style="font-size:12px">Time: ${fmtDate(t.createdAt)}</div>
+      <hr>
+      <div style="font-size:12px">Patient: <b>${esc(p ? patientName(p) : t.patientName || '—')}</b></div>
+      ${p?.number ? `<div style="font-size:12px">No: ${esc(p.number)}</div>` : ''}
+      <hr>
+      <div style="font-size:11px">Your token</div>
+      <div style="font-size:52px;font-weight:bold;margin:.3rem 0">T${String(t.tokenNumber||0).padStart(3,'0')}</div>
+      <hr>
+      <div style="font-size:11px">Please wait for your number to be called.</div>
+    </div>
+  `, 'max-w-md');
+}
+
+function printQueueBoard() {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
+  const w = window.open('', '_blank');
+  w.document.write(`
+    <html><head><title>Queue</title>
+    <style>
+      body{font-family:system-ui;padding:2rem}
+      h1{font-size:20px;text-align:center;margin:0 0 .5rem 0}
+      p.sub{text-align:center;font-size:12px;color:#555;margin:0 0 1rem 0}
+      h3{font-size:14px;margin-top:1.5rem}
+      table{width:100%;border-collapse:collapse}
+      th,td{padding:6px;border-bottom:1px solid #ccc;text-align:left;font-size:13px}
+      th{background:#f0f0f0}
+    </style></head><body>
+      <h1>StraightUpMedical</h1>
+      <p class="sub">Queue Status — ${fmtDate(new Date())}</p>
       ${el.innerHTML}
     </body></html>
   `);
