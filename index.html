@@ -37,11 +37,14 @@
 </style>
 </head>
 <body class="bg-gray-100">
-
 <div id="loginScreen" class="min-h-screen flex items-center justify-center">
   <div class="card p-8 w-full max-w-sm">
-    <h1 class="text-2xl font-bold text-center mb-2">🏥 Clinic HMS</h1>
+    <div class="text-center mb-4">
+      <img src="logo.png" alt="Logo" style="max-width:140px;max-height:80px;margin:0 auto;display:block">
+    </div>
+    <h1 class="text-2xl font-bold text-center mb-1">Clinic HMS</h1>
     <p class="text-center text-gray-500 text-sm mb-6">Sign in to continue</p>
+
     <div id="loginError" class="hidden bg-red-100 text-red-700 p-2 rounded mb-3 text-sm"></div>
     <label class="label">Email</label>
     <input id="loginEmail" type="email" class="input mb-3" placeholder="you@clinic.com">
@@ -55,9 +58,10 @@
 <div id="appScreen" class="hidden">
   <div class="bg-white border-b px-4 py-2 flex items-center justify-between">
     <div class="flex items-center gap-3">
-      <span class="text-xl font-bold">🏥 Clinic HMS</span>
-      <span id="currentUser" class="text-sm text-gray-500"></span>
-    </div>
+  <img src="logo.png" alt="Logo" style="height:32px">
+  <span class="text-xl font-bold">Clinic HMS</span>
+  <span id="currentUser" class="text-sm text-gray-500"></span>
+</div>
     <div class="flex items-center gap-2">
       <span id="currentRole" class="badge bg-blue-100 text-blue-700"></span>
       <button onclick="doLogout()" class="btn btn-secondary text-sm">Logout</button>
