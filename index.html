@@ -461,9 +461,17 @@ async function openPatient(patientId) {
       <button onclick="closeModal();goRadiology('${patientId}')" class="btn btn-primary text-sm">+ Radiology</button>
       <button onclick="closeModal();goPharmacy('${patientId}')" class="btn btn-primary text-sm">+ Prescription</button>
       <button onclick="closeModal();goPayment('${patientId}')" class="btn btn-primary text-sm">+ Payment</button>
+      <button onclick="printPatientCard('${patientId}')" class="btn btn-secondary text-sm">🆔 ID Card</button>
       <button onclick="window.print()" class="btn btn-secondary text-sm">🖨 Print Record</button>
     </div>
-
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+  <div class="card p-3">
+    <div id="vg_weight"></div>
+  </div>
+  <div class="card p-3">
+    <div id="vg_bp"></div>
+  </div>
+</div>
     <h4 class="font-semibold mb-2">Clinical Timeline</h4>
     <div class="border rounded max-h-96 overflow-y-auto">
       ${timeline.length ? timeline.map(t => `
@@ -475,6 +483,15 @@ async function openPatient(patientId) {
       `).join('') : '<div class="p-4 text-gray-400 text-center">No events yet.</div>'}
     </div>
   `, 'max-w-4xl');
+  // Draw vitals graphs from already-fetched vitals
+const vitalsArr = vitalsSnap.docs.map(d => d.data());
+drawVitalsChart('vg_weight', vitalsArr, 'weight', '#2563eb', 'Weight', 'kg');
+// For BP: split "120/80" into systolic
+const bpArr = vitalsArr.map(v => {
+  if (!v.bp || typeof v.bp !== 'string' || !v.bp.includes('/')) return v;
+  return { ...v, systolic: v.bp.split('/')[0] };
+});
+drawVitalsChart('vg_bp', bpArr, 'systolic', '#dc2626', 'Systolic BP', 'mmHg');
 }
 
 function goNurse(pid)      { renderView('nurse');        setTimeout(()=>nurseSelectPatient(pid), 100); }
@@ -2649,159 +2666,126 @@ async function printReceipt(paymentId) {
     </div>`;
   openModal(html, 'max-w-md');
 }
+  // ============================================================
+// PATIENT ID CARD
+// ============================================================
+async function printPatientCard(patientId) {
+  const doc = await db.collection('patients').doc(patientId).get();
+  if (!doc.exists) return toast('Patient not found', 'error');
+  const p = { id: patientId, ...doc.data() };
+  const age = p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 3.154e10) : '';
+  const qrData = encodeURIComponent(`StraightUpMedical|${p.number||''}|${patientName(p)}|${p.phone||''}`);
+  const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${qrData}`;
+
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Patient ID Card</h3>
+      <div><button onclick="window.print()" class="btn btn-primary text-sm">🖨 Print</button>
+      <button onclick="closeModal()" class="btn btn-secondary text-sm">Close</button></div>
+    </div>
+
+    <div id="printArea" style="font-family:system-ui">
+      <div style="width:85mm;height:54mm;border:1px solid #333;border-radius:8px;padding:8px;display:flex;gap:8px;background:#fff">
+        <div style="flex:0 0 40mm">
+          <img src="logo.png" alt="Logo" style="max-width:35mm;max-height:12mm;display:block;margin-bottom:2mm">
+          <div style="font-size:9px;color:#333">
+            <div style="font-weight:bold;font-size:11px">${esc(patientName(p))}</div>
+            <div>No: <b>${esc(p.number||'—')}</b></div>
+            <div>Sex/Age: ${esc(p.gender||'—')} / ${age}</div>
+            <div>Blood: <b>${esc(p.bloodGroup||'—')}</b></div>
+            <div style="margin-top:2mm">Tel: ${esc(p.phone||'—')}</div>
+            <div>Next of kin: ${esc(p.kin||'—')}</div>
+            <div style="margin-top:2mm;font-size:8px">Allergies: ${esc((p.allergies||'None').slice(0,40))}</div>
+          </div>
+        </div>
+        <div style="flex:1;text-align:center">
+          <img src="${qrUrl}" alt="QR" style="width:35mm;height:35mm">
+          <div style="font-size:8px;color:#555">Scan at reception</div>
+        </div>
+      </div>
+
+      <!-- back of card -->
+      <div style="width:85mm;height:54mm;border:1px solid #333;border-radius:8px;padding:8px;background:#fff;margin-top:8mm;font-size:9px">
+        <div style="text-align:center;font-weight:bold;font-size:11px;margin-bottom:2mm">StraightUpMedical</div>
+        <div><b>Chronic:</b> ${esc(p.chronic||'None recorded')}</div>
+        <div style="margin-top:2mm"><b>Address:</b> ${esc(p.address||'—')}</div>
+        <div style="margin-top:2mm"><b>Next of kin phone:</b> ${esc(p.kinPhone||'—')}</div>
+        <div style="margin-top:3mm;font-size:8px;color:#666">This card remains the property of StraightUpMedical. Report if found.</div>
+      </div>
+    </div>
+  `, 'max-w-md');
+}
+  // ============================================================
+// VITALS GRAPH (SVG, no library)
+// ============================================================
+function drawVitalsChart(containerId, vitals, field, color, label, unit) {
+  const points = vitals
+    .filter(v => v[field] && !isNaN(parseFloat(v[field])))
+    .map(v => ({ value: parseFloat(v[field]), ts: v.createdAt?.toDate ? v.createdAt.toDate() : new Date(v.createdAt || 0) }))
+    .sort((a,b) => a.ts - b.ts);
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (points.length < 2) {
+    el.innerHTML = `<div class="text-xs text-gray-400 text-center py-4">Need at least 2 readings for a trend chart</div>`;
+    return;
+  }
+  const w = 600, h = 140, pad = 30;
+  const minV = Math.min(...points.map(p => p.value));
+  const maxV = Math.max(...points.map(p => p.value));
+  const range = maxV - minV || 1;
+  const xStep = (w - pad*2) / (points.length - 1);
+  const yScale = v => h - pad - ((v - minV) / range) * (h - pad*2);
+  const pathD = points.map((p, i) => `${i===0?'M':'L'} ${pad + i*xStep} ${yScale(p.value)}`).join(' ');
+  const dots = points.map((p, i) => `<circle cx="${pad + i*xStep}" cy="${yScale(p.value)}" r="3" fill="${color}"/>`).join('');
+  el.innerHTML = `
+    <div class="text-xs font-semibold mb-1">${label} (${points.length} readings)</div>
+    <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:auto">
+      <line x1="${pad}" y1="${h-pad}" x2="${w-pad}" y2="${h-pad}" stroke="#ccc"/>
+      <line x1="${pad}" y1="${pad}" x2="${pad}" y2="${h-pad}" stroke="#ccc"/>
+      <text x="${pad-5}" y="${pad}" text-anchor="end" font-size="10" fill="#666">${maxV}</text>
+      <text x="${pad-5}" y="${h-pad}" text-anchor="end" font-size="10" fill="#666">${minV}</text>
+      <path d="${pathD}" fill="none" stroke="${color}" stroke-width="2"/>
+      ${dots}
+    </svg>`;
+}
 // ============================================================
 // REPORTS MODULE
 // ============================================================
 let REPORT_DATE = new Date().toISOString().slice(0,10);
+let REPORT_TAB = 'daily';
 
 async function viewReports(c) {
-  const d = REPORT_DATE;
-  const [visitsSnap, paysSnap, consSnap, labSnap, rxSnap, vitalsSnap, patsSnap] = await Promise.all([
-    db.collection('visits').where('date','==',d).get(),
-    db.collection('payments').where('date','==',d).get(),
-    db.collection('consultations').where('date','==',d).get(),
-    db.collection('labOrders').where('date','==',d).get(),
-    db.collection('prescriptions').where('date','==',d).get(),
-    db.collection('vitals').where('date','==',d).get(),
-    db.collection('patients').get()
-  ]);
-
-  const visits = visitsSnap.docs.map(x => ({ id: x.id, ...x.data() }));
-  const pays = paysSnap.docs.map(x => ({ id: x.id, ...x.data() }));
-  const cons = consSnap.docs.map(x => ({ id: x.id, ...x.data() }));
-  const labs = labSnap.docs.map(x => ({ id: x.id, ...x.data() }));
-  const rxs = rxSnap.docs.map(x => ({ id: x.id, ...x.data() }));
-  const vitals = vitalsSnap.docs.map(x => ({ id: x.id, ...x.data() }));
-
-  const byMode = {};
-  pays.forEach(p => { byMode[p.mode] = (byMode[p.mode]||0) + (p.amount||0); });
-  const revenue = pays.reduce((s,p) => s + (p.amount||0), 0);
-
-  const newRegs = patsSnap.docs.filter(doc => {
-    const ts = doc.data().createdAt;
-    if (!ts) return false;
-    const dt = ts.toDate ? ts.toDate() : new Date(ts);
-    return dt.toISOString().slice(0,10) === d;
-  }).length;
-
-  // drug totals
-  const drugTotals = {};
-  rxs.forEach(r => (r.items||[]).forEach(i => {
-    const key = `${i.name}`;
-    drugTotals[key] = (drugTotals[key]||0) + (i.qty||0);
-  }));
-  const drugList = Object.entries(drugTotals).sort((a,b) => b[1]-a[1]);
-
-  // lab tests totals
-  const labTotals = {};
-  labs.forEach(o => (o.tests||[]).forEach(t => {
-    labTotals[t.name] = (labTotals[t.name]||0) + 1;
-  }));
-  const labList = Object.entries(labTotals).sort((a,b) => b[1]-a[1]);
-
-  const yesterday = new Date(d); yesterday.setDate(yesterday.getDate()-1);
-  const tomorrow = new Date(d); tomorrow.setDate(tomorrow.getDate()+1);
-  const yStr = yesterday.toISOString().slice(0,10);
-  const tStr = tomorrow.toISOString().slice(0,10);
-
   c.innerHTML = `
     <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
-      <h2 class="text-2xl font-bold">Daily Report</h2>
-      <div class="flex gap-2">
-        <button onclick="reportJump('${yStr}')" class="btn btn-secondary text-sm">← Prev</button>
-        <button onclick="reportJump('${todayStr()}')" class="btn btn-secondary text-sm">Today</button>
-        <button onclick="reportJump('${tStr}')" class="btn btn-secondary text-sm">Next →</button>
-        <button onclick="printDailyReport()" class="btn btn-primary text-sm">🖨 Print Report</button>
-      </div>
+      <h2 class="text-2xl font-bold">Reports</h2>
+      <button onclick="printReportCurrent()" class="btn btn-primary text-sm">🖨 Print</button>
     </div>
-
-    <div class="card p-4 mb-4">
-      <label class="label">Report date</label>
-      <input type="date" class="input" style="width:auto" value="${d}" onchange="reportJump(this.value)">
+    <div class="bg-white border-b mb-4 flex gap-1 overflow-x-auto">
+      ${['daily','weekly','monthly','balances'].map(t => `
+        <button onclick="reportTab('${t}')" class="px-4 py-2 text-sm whitespace-nowrap ${REPORT_TAB===t?'tab-active':''}" id="rtab_${t}">
+          ${t.charAt(0).toUpperCase()+t.slice(1)}
+        </button>
+      `).join('')}
     </div>
-
-    <div id="reportBody">
-      <div class="text-center mb-4">
-        <img src="logo.png" alt="Logo" style="max-width:130px;margin:0 auto .3rem auto;display:block">
-        <h1 class="text-2xl font-bold">StraightUpMedical</h1>
-        <p class="text-sm text-gray-500">Daily Operations Report — ${esc(d)}</p>
-      </div>
-
-      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <div class="card p-3"><div class="text-xs text-gray-500">Patients Seen</div><div class="text-2xl font-bold">${visits.length}</div></div>
-        <div class="card p-3"><div class="text-xs text-gray-500">Revenue (KES)</div><div class="text-2xl font-bold">${revenue.toLocaleString()}</div></div>
-        <div class="card p-3"><div class="text-xs text-gray-500">Consultations</div><div class="text-2xl font-bold">${cons.length}</div></div>
-        <div class="card p-3"><div class="text-xs text-gray-500">New Registrations</div><div class="text-2xl font-bold">${newRegs}</div></div>
-      </div>
-
-      <div class="card p-4 mb-4">
-        <h3 class="font-semibold mb-2">Revenue by Mode</h3>
-        ${Object.keys(byMode).length ? `<table><thead><tr><th>Mode</th><th>Amount (KES)</th></tr></thead><tbody>
-          ${Object.entries(byMode).map(([m,a]) => `<tr><td>${esc(m)}</td><td><b>${a.toLocaleString()}</b></td></tr>`).join('')}
-          <tr style="background:#f9fafb"><td><b>Total</b></td><td><b>${revenue.toLocaleString()}</b></td></tr>
-        </tbody></table>` : '<p class="text-gray-400">No payments recorded.</p>'}
-      </div>
-
-      <div class="card p-4 mb-4">
-        <h3 class="font-semibold mb-2">Diagnoses (${cons.length})</h3>
-        ${cons.length ? `<table><thead><tr><th>Patient</th><th>Diagnosis</th><th>Treatment</th></tr></thead><tbody>
-          ${cons.map(x => {
-            const p = CACHE.patients.find(y => y.id === x.patientId);
-            return `<tr>
-              <td>${esc(p ? patientName(p) : '—')}</td>
-              <td>${esc(x.diagnosis||'—')}</td>
-              <td class="text-gray-600">${esc((x.treatment||'').slice(0,80))}</td>
-            </tr>`;
-          }).join('')}
-        </tbody></table>` : '<p class="text-gray-400">No consultations.</p>'}
-      </div>
-
-      <div class="card p-4 mb-4">
-        <h3 class="font-semibold mb-2">Lab Orders (${labs.length})</h3>
-        ${labs.length ? `<table><thead><tr><th>Patient</th><th>Tests</th><th>Status</th></tr></thead><tbody>
-          ${labs.map(x => {
-            const p = CACHE.patients.find(y => y.id === x.patientId);
-            const color = x.status === 'ready' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700';
-            return `<tr>
-              <td>${esc(p ? patientName(p) : '—')}</td>
-              <td>${esc((x.tests||[]).map(t=>t.name).join(', '))}</td>
-              <td><span class="badge ${color}">${esc(x.status)}</span></td>
-            </tr>`;
-          }).join('')}
-        </tbody></table>` : '<p class="text-gray-400">No lab orders.</p>'}
-      </div>
-
-      <div class="card p-4 mb-4">
-        <h3 class="font-semibold mb-2">Drugs Dispensed / Prescribed</h3>
-        ${drugList.length ? `<table><thead><tr><th>Drug</th><th>Total Qty</th></tr></thead><tbody>
-          ${drugList.map(([name, qty]) => `<tr><td>${esc(name)}</td><td><b>${qty}</b></td></tr>`).join('')}
-        </tbody></table>` : '<p class="text-gray-400">No prescriptions.</p>'}
-      </div>
-
-      <div class="card p-4 mb-4">
-        <h3 class="font-semibold mb-2">Vitals Recorded</h3>
-        <p><b>${vitals.length}</b> triage entries logged today.</p>
-      </div>
-    </div>
-  `;
+    <div id="reportBody"></div>`;
+  if (REPORT_TAB === 'daily')    await renderReportDaily();
+  else if (REPORT_TAB === 'weekly')  await renderReportRange(7);
+  else if (REPORT_TAB === 'monthly') await renderReportRange(30);
+  else if (REPORT_TAB === 'balances') await renderBalances();
 }
 
-function reportJump(d) {
-  REPORT_DATE = d;
-  renderView('reports');
-}
+function reportTab(t) { REPORT_TAB = t; renderView('reports'); }
 
-function printDailyReport() {
+function printReportCurrent() {
   const el = document.getElementById('reportBody');
   if (!el) return;
   const w = window.open('', '_blank');
   w.document.write(`
-    <html><head><title>Daily Report — ${REPORT_DATE}</title>
+    <html><head><title>Report</title>
     <style>
       body{font-family:system-ui;padding:2rem;max-width:800px;margin:auto}
       h1{font-size:22px;margin:0;text-align:center}
       h3{font-size:14px;margin-top:1.5rem;border-bottom:1px solid #ccc;padding-bottom:3px}
-      p{font-size:13px}
       table{width:100%;border-collapse:collapse;margin-top:.5rem}
       th,td{padding:5px;border-bottom:1px solid #ccc;text-align:left;font-size:12px}
       th{background:#f0f0f0}
@@ -2815,6 +2799,278 @@ function printDailyReport() {
   w.document.close();
   w.print();
 }
+
+async function renderReportDaily() {
+  const d = REPORT_DATE;
+  const [visitsSnap, paysSnap, consSnap, labSnap, rxSnap, vitalsSnap, patsSnap] = await Promise.all([
+    db.collection('visits').where('date','==',d).get(),
+    db.collection('payments').where('date','==',d).get(),
+    db.collection('consultations').where('date','==',d).get(),
+    db.collection('labOrders').where('date','==',d).get(),
+    db.collection('prescriptions').where('date','==',d).get(),
+    db.collection('vitals').where('date','==',d).get(),
+    db.collection('patients').get()
+  ]);
+  const visits = visitsSnap.docs.map(x => x.data());
+  const pays = paysSnap.docs.map(x => x.data());
+  const cons = consSnap.docs.map(x => x.data());
+  const labs = labSnap.docs.map(x => x.data());
+  const rxs = rxSnap.docs.map(x => x.data());
+  const vitals = vitalsSnap.docs.map(x => x.data());
+
+  const byMode = {};
+  pays.forEach(p => { byMode[p.mode] = (byMode[p.mode]||0) + (p.amount||0); });
+  const revenue = pays.reduce((s,p) => s + (p.amount||0), 0);
+  const newRegs = patsSnap.docs.filter(doc => {
+    const ts = doc.data().createdAt;
+    if (!ts) return false;
+    const dt = ts.toDate ? ts.toDate() : new Date(ts);
+    return dt.toISOString().slice(0,10) === d;
+  }).length;
+
+  const drugTotals = {};
+  rxs.forEach(r => (r.items||[]).forEach(i => { drugTotals[i.name] = (drugTotals[i.name]||0) + (i.qty||0); }));
+  const drugList = Object.entries(drugTotals).sort((a,b) => b[1]-a[1]);
+
+  const yesterday = new Date(d); yesterday.setDate(yesterday.getDate()-1);
+  const tomorrow = new Date(d); tomorrow.setDate(tomorrow.getDate()+1);
+
+  document.getElementById('reportBody').innerHTML = `
+    <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+      <div class="flex gap-2">
+        <button onclick="reportJump('${yesterday.toISOString().slice(0,10)}')" class="btn btn-secondary text-sm">← Prev</button>
+        <button onclick="reportJump('${todayStr()}')" class="btn btn-secondary text-sm">Today</button>
+        <button onclick="reportJump('${tomorrow.toISOString().slice(0,10)}')" class="btn btn-secondary text-sm">Next →</button>
+      </div>
+      <input type="date" class="input" style="width:auto" value="${d}" onchange="reportJump(this.value)">
+    </div>
+
+    <div class="text-center mb-4">
+      <img src="logo.png" alt="Logo" style="max-width:130px;margin:0 auto .3rem auto;display:block">
+      <h1 class="text-2xl font-bold">StraightUpMedical</h1>
+      <p class="text-sm text-gray-500">Daily Operations Report — ${esc(d)}</p>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="card p-3"><div class="text-xs text-gray-500">Patients Seen</div><div class="text-2xl font-bold">${visits.length}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Revenue (KES)</div><div class="text-2xl font-bold">${revenue.toLocaleString()}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Consultations</div><div class="text-2xl font-bold">${cons.length}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">New Registrations</div><div class="text-2xl font-bold">${newRegs}</div></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Revenue by Mode</h3>
+      ${Object.keys(byMode).length ? `<table><thead><tr><th>Mode</th><th>Amount (KES)</th></tr></thead><tbody>
+        ${Object.entries(byMode).map(([m,a]) => `<tr><td>${esc(m)}</td><td><b>${a.toLocaleString()}</b></td></tr>`).join('')}
+        <tr style="background:#f9fafb"><td><b>Total</b></td><td><b>${revenue.toLocaleString()}</b></td></tr>
+      </tbody></table>` : '<p class="text-gray-400">No payments recorded.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Diagnoses (${cons.length})</h3>
+      ${cons.length ? `<table><thead><tr><th>Patient</th><th>Diagnosis</th><th>Treatment</th></tr></thead><tbody>
+        ${cons.map(x => {
+          const p = CACHE.patients.find(y => y.id === x.patientId);
+          return `<tr><td>${esc(p ? patientName(p) : '—')}</td><td>${esc(x.diagnosis||'—')}</td><td class="text-gray-600">${esc((x.treatment||'').slice(0,80))}</td></tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No consultations.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Lab Orders (${labs.length})</h3>
+      ${labs.length ? `<table><thead><tr><th>Patient</th><th>Tests</th><th>Status</th></tr></thead><tbody>
+        ${labs.map(x => {
+          const p = CACHE.patients.find(y => y.id === x.patientId);
+          const color = x.status === 'ready' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700';
+          return `<tr><td>${esc(p ? patientName(p) : '—')}</td><td>${esc((x.tests||[]).map(t=>t.name).join(', '))}</td><td><span class="badge ${color}">${esc(x.status)}</span></td></tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No lab orders.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Drugs Dispensed / Prescribed</h3>
+      ${drugList.length ? `<table><thead><tr><th>Drug</th><th>Total Qty</th></tr></thead><tbody>
+        ${drugList.map(([name, qty]) => `<tr><td>${esc(name)}</td><td><b>${qty}</b></td></tr>`).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No prescriptions.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Vitals Recorded</h3>
+      <p><b>${vitals.length}</b> triage entries logged today.</p>
+    </div>`;
+}
+
+async function renderReportRange(days) {
+  const end = new Date(); end.setHours(23,59,59,999);
+  const start = new Date(); start.setDate(start.getDate() - (days-1)); start.setHours(0,0,0,0);
+  const startStr = start.toISOString().slice(0,10);
+  const endStr = end.toISOString().slice(0,10);
+
+  const [paysSnap, consSnap, patsSnap, labsSnap, rxsSnap] = await Promise.all([
+    db.collection('payments').where('date','>=',startStr).where('date','<=',endStr).get(),
+    db.collection('consultations').where('date','>=',startStr).where('date','<=',endStr).get(),
+    db.collection('patients').get(),
+    db.collection('labOrders').where('date','>=',startStr).where('date','<=',endStr).get(),
+    db.collection('prescriptions').where('date','>=',startStr).where('date','<=',endStr).get()
+  ]);
+  const pays = paysSnap.docs.map(x => x.data());
+  const cons = consSnap.docs.map(x => x.data());
+  const labs = labsSnap.docs.map(x => x.data());
+  const rxs = rxsSnap.docs.map(x => x.data());
+
+  const byMode = {};
+  pays.forEach(p => { byMode[p.mode] = (byMode[p.mode]||0) + (p.amount||0); });
+  const totalRev = pays.reduce((s,p) => s + (p.amount||0), 0);
+
+  // revenue by day
+  const byDay = {};
+  pays.forEach(p => { byDay[p.date] = (byDay[p.date]||0) + (p.amount||0); });
+  const dayRows = Object.entries(byDay).sort();
+
+  // top diagnoses
+  const dx = {};
+  cons.forEach(c => { dx[c.diagnosis] = (dx[c.diagnosis]||0) + 1; });
+  const dxList = Object.entries(dx).sort((a,b) => b[1]-a[1]).slice(0,15);
+
+  // top drugs
+  const drugT = {};
+  rxs.forEach(r => (r.items||[]).forEach(i => { drugT[i.name] = (drugT[i.name]||0) + (i.qty||0); }));
+  const drugList = Object.entries(drugT).sort((a,b) => b[1]-a[1]).slice(0,15);
+
+  const newRegs = patsSnap.docs.filter(doc => {
+    const ts = doc.data().createdAt;
+    if (!ts) return false;
+    const dt = ts.toDate ? ts.toDate() : new Date(ts);
+    const s = dt.toISOString().slice(0,10);
+    return s >= startStr && s <= endStr;
+  }).length;
+
+  document.getElementById('reportBody').innerHTML = `
+    <div class="text-center mb-4">
+      <img src="logo.png" alt="Logo" style="max-width:130px;margin:0 auto .3rem auto;display:block">
+      <h1 class="text-2xl font-bold">StraightUpMedical</h1>
+      <p class="text-sm text-gray-500">${days === 7 ? 'Weekly' : 'Monthly'} Report — ${esc(startStr)} to ${esc(endStr)}</p>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="card p-3"><div class="text-xs text-gray-500">Total Revenue (KES)</div><div class="text-2xl font-bold">${totalRev.toLocaleString()}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Consultations</div><div class="text-2xl font-bold">${cons.length}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Lab Orders</div><div class="text-2xl font-bold">${labs.length}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">New Registrations</div><div class="text-2xl font-bold">${newRegs}</div></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Revenue by Mode</h3>
+      ${Object.keys(byMode).length ? `<table><thead><tr><th>Mode</th><th>Amount (KES)</th></tr></thead><tbody>
+        ${Object.entries(byMode).map(([m,a]) => `<tr><td>${esc(m)}</td><td><b>${a.toLocaleString()}</b></td></tr>`).join('')}
+        <tr style="background:#f9fafb"><td><b>Total</b></td><td><b>${totalRev.toLocaleString()}</b></td></tr>
+      </tbody></table>` : '<p class="text-gray-400">No payments.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Revenue by Day</h3>
+      ${dayRows.length ? `<table><thead><tr><th>Date</th><th>Amount (KES)</th></tr></thead><tbody>
+        ${dayRows.map(([d,a]) => `<tr><td>${esc(d)}</td><td>${a.toLocaleString()}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No data.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Top Diagnoses</h3>
+      ${dxList.length ? `<table><thead><tr><th>Diagnosis</th><th>Count</th></tr></thead><tbody>
+        ${dxList.map(([d,n]) => `<tr><td>${esc(d)}</td><td>${n}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No data.</p>'}
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Top Drugs Dispensed</h3>
+      ${drugList.length ? `<table><thead><tr><th>Drug</th><th>Qty</th></tr></thead><tbody>
+        ${drugList.map(([d,n]) => `<tr><td>${esc(d)}</td><td>${n}</td></tr>`).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No data.</p>'}
+    </div>`;
+}
+
+async function renderBalances() {
+  // Outstanding = patients whose total payments < total billed
+  // We compute "billed" from each visit's payments' items.total? Simpler: outstanding = debts collection + manual
+  // Here we surface a computed view: for each patient, sum paid; show top unpaid accounts (from bills if you track).
+  // Since bills aren't tracked separately, show patients with payments in last 30 days sorted by amount paid ascending.
+
+  const start = new Date(); start.setDate(start.getDate()-30);
+  const startStr = start.toISOString().slice(0,10);
+  const snap = await db.collection('payments').where('date','>=',startStr).get();
+  const pays = snap.docs.map(x => x.data());
+
+  const byPatient = {};
+  pays.forEach(p => {
+    byPatient[p.patientId] = byPatient[p.patientId] || { paid: 0, items: [] };
+    byPatient[p.patientId].paid += (p.amount||0);
+    (p.items||[]).forEach(i => byPatient[p.patientId].items.push(i));
+  });
+
+  const rows = Object.entries(byPatient).map(([pid, v]) => {
+    const p = CACHE.patients.find(x => x.id === pid);
+    return { pid, patient: p, paid: v.paid };
+  }).sort((a,b) => a.paid - b.paid);
+
+  document.getElementById('reportBody').innerHTML = `
+    <div class="text-center mb-4">
+      <img src="logo.png" alt="Logo" style="max-width:130px;margin:0 auto .3rem auto;display:block">
+      <h1 class="text-2xl font-bold">StraightUpMedical</h1>
+      <p class="text-sm text-gray-500">Outstanding Balances — last 30 days</p>
+    </div>
+
+    <div class="card p-4 mb-4 bg-blue-50 border border-blue-200">
+      <p class="text-sm">
+        <b>How this works:</b> This view lists patients who have had at least one payment in the last 30 days,
+        sorted by total paid ascending. Lowest-paid patients are at the top — likely to have balances pending.
+        For formal invoice tracking, consider adding a "Bills" module.
+      </p>
+    </div>
+
+    ${rows.length ? `<div class="card p-4">
+      <table><thead><tr>
+        <th>Patient</th><th>Number</th><th>Phone</th><th>Total Paid (30d)</th><th></th>
+      </tr></thead><tbody>
+        ${rows.map(r => `<tr>
+          <td>${esc(r.patient ? patientName(r.patient) : '—')}</td>
+          <td>${esc(r.patient?.number||'')}</td>
+          <td>${esc(r.patient?.phone||'')}</td>
+          <td><b>KES ${r.paid.toLocaleString()}</b></td>
+          <td><button onclick="showPatientBalance('${r.pid}')" class="text-blue-600 text-sm">View</button></td>
+        </tr>`).join('')}
+      </tbody></table>
+    </div>` : '<p class="text-gray-400">No payment activity in last 30 days.</p>'}`;
+}
+
+async function showPatientBalance(pid) {
+  const start = new Date(); start.setDate(start.getDate()-30);
+  const startStr = start.toISOString().toISOString ? start.toISOString().slice(0,10) : start.toISOString().slice(0,10);
+  const snap = await db.collection('payments').where('patientId','==',pid).get();
+  const pays = snap.docs.map(x => x.data()).filter(p => (p.date||'') >= startStr);
+  const p = CACHE.patients.find(x => x.id === pid);
+  const total = pays.reduce((s,x) => s + (x.amount||0), 0);
+  openModal(`
+    <h3 class="text-xl font-bold mb-3">Payment History (30 days) — ${esc(p ? patientName(p) : '')}</h3>
+    ${pays.length ? `<table><thead><tr><th>Date</th><th>Mode</th><th>Amount</th><th>Items</th></tr></thead><tbody>
+      ${pays.map(x => `<tr>
+        <td>${esc(x.date||'')}</td>
+        <td>${esc(x.mode||'')}</td>
+        <td><b>KES ${(x.amount||0).toLocaleString()}</b></td>
+        <td class="text-xs text-gray-600">${esc((x.items||[]).map(i=>i.desc).join(', '))}</td>
+      </tr>`).join('')}
+      <tr style="background:#f9fafb"><td colspan="2"><b>Total</b></td><td colspan="2"><b>KES ${total.toLocaleString()}</b></td></tr>
+    </tbody></table>` : '<p class="text-gray-400">No payments in this period.</p>'}
+    <div class="flex justify-end mt-3">
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+  `);
+}
+
+function reportJump(d) {
+  REPORT_DATE = d;
+  renderView('reports');
+}
+
 // ============================================================
 // ADMIN MODULE
 // ============================================================
@@ -2873,6 +3129,25 @@ async function changeRole(uid, role) {
   await db.collection('users').doc(uid).update({ role });
   toast('Role updated', 'success');
 }
+  // ============================================================
+// AUTO-LOGOUT AFTER INACTIVITY
+// ============================================================
+const IDLE_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+let _idleTimer = null;
+function _resetIdleTimer() {
+  if (!CURRENT_USER) return;
+  clearTimeout(_idleTimer);
+  _idleTimer = setTimeout(() => {
+    if (!CURRENT_USER) return;
+    toast('Logged out after 15 minutes of inactivity', 'info');
+    auth.signOut();
+  }, IDLE_TIMEOUT_MS);
+}
+['mousemove','keydown','click','touchstart','scroll'].forEach(evt =>
+  document.addEventListener(evt, _resetIdleTimer, true)
+);
+// reset when user logs in (hook into existing onAuthStateChanged indirectly)
+setInterval(() => { if (CURRENT_USER) _resetIdleTimer(); }, 60000);
 </script>
 </body>
 </html>
