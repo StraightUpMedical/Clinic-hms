@@ -152,6 +152,7 @@ auth.onAuthStateChanged(async (user) => {
 const NAV_ITEMS = [
   { key: 'dashboard',     label: 'Dashboard',     roles: ['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier'] },
   { key: 'patients',      label: 'Patients',      roles: ['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier'] },
+  { key: 'appointments', label: 'Appointments', roles: ['admin','doctor','nurse','reception','cashier'] },
   { key: 'nurse',         label: 'Nurse / Triage',roles: ['admin','nurse','doctor'] },
   { key: 'consultation',  label: 'Consultation',  roles: ['admin','doctor'] },
   { key: 'referral',       label: 'Referral',        roles: ['admin','doctor'] },
@@ -236,6 +237,7 @@ async function renderView(key) {
   try {
     if (key === 'dashboard')    await viewDashboard(c);
     else if (key === 'patients')    await viewPatients(c);
+    else if (key === 'appointments') await viewAppointments(c);  
     else if (key === 'nurse')       await viewNurse(c);
     else if (key === 'consultation')await viewConsultation(c);
     else if (key === 'referral')    await viewReferral(c);  
@@ -1613,6 +1615,190 @@ async function referralPrint(id) {
       </div>
     </div>
   `, 'max-w-3xl');
+}
+  // ============================================================
+// APPOINTMENTS MODULE
+// ============================================================
+let APPT_DATE = new Date().toISOString().slice(0,10);
+
+async function viewAppointments(c) {
+  const selectedDate = APPT_DATE;
+  const [apptSnap, docsSnap] = await Promise.all([
+    db.collection('appointments').where('date','==',selectedDate).get(),
+    db.collection('users').where('role','==','doctor').get()
+  ]);
+  const appts = apptSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    .sort((a,b) => (a.time||'').localeCompare(b.time||''));
+  CACHE.doctors = docsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // day navigation helpers
+  const yesterday = new Date(selectedDate); yesterday.setDate(yesterday.getDate()-1);
+  const tomorrow = new Date(selectedDate); tomorrow.setDate(tomorrow.getDate()+1);
+  const yStr = yesterday.toISOString().slice(0,10);
+  const tStr = tomorrow.toISOString().slice(0,10);
+  const todayS = todayStr();
+
+  const counts = {
+    scheduled: appts.filter(a => a.status === 'scheduled').length,
+    checkedin: appts.filter(a => a.status === 'checked-in').length,
+    completed: appts.filter(a => a.status === 'completed').length,
+    cancelled: appts.filter(a => a.status === 'cancelled' || a.status === 'no-show').length
+  };
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+      <h2 class="text-2xl font-bold">Appointments</h2>
+      <div class="flex gap-2">
+        <button onclick="apptQuickJump('${yStr}')" class="btn btn-secondary text-sm">← Prev</button>
+        <button onclick="apptQuickJump('${todayS}')" class="btn btn-secondary text-sm">Today</button>
+        <button onclick="apptQuickJump('${tStr}')" class="btn btn-secondary text-sm">Next →</button>
+        <button onclick="newApptModal()" class="btn btn-primary">+ Book Appointment</button>
+      </div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <div class="flex items-center gap-4 flex-wrap">
+        <div>
+          <label class="label">Date</label>
+          <input type="date" class="input" style="width:auto" value="${selectedDate}" onchange="apptQuickJump(this.value)">
+        </div>
+        <div class="flex gap-3 text-sm">
+          <span class="badge bg-blue-100 text-blue-700">Scheduled: ${counts.scheduled}</span>
+          <span class="badge bg-yellow-100 text-yellow-700">Checked-in: ${counts.checkedin}</span>
+          <span class="badge bg-green-100 text-green-700">Completed: ${counts.completed}</span>
+          <span class="badge bg-gray-200 text-gray-700">Cancelled/No-show: ${counts.cancelled}</span>
+        </div>
+        <button onclick="printApptSchedule()" class="btn btn-secondary text-sm ml-auto">🖨 Print Schedule</button>
+      </div>
+    </div>
+
+    <div class="card p-4" id="apptList">
+      <h3 class="font-semibold mb-2">${fmtDate(new Date(selectedDate))} (${appts.length})</h3>
+      ${appts.length ? `<table><thead><tr>
+        <th>Time</th><th>Patient</th><th>Doctor</th><th>Reason</th><th>Status</th><th></th>
+      </tr></thead><tbody>
+        ${appts.map(a => {
+          const p = CACHE.patients.find(x => x.id === a.patientId);
+          const doc = CACHE.doctors.find(x => x.id === a.doctorId);
+          const statusColor = a.status === 'completed' ? 'bg-green-100 text-green-700' :
+                              a.status === 'checked-in' ? 'bg-yellow-100 text-yellow-700' :
+                              a.status === 'cancelled' || a.status === 'no-show' ? 'bg-gray-200 text-gray-700' :
+                              'bg-blue-100 text-blue-700';
+          return `<tr>
+            <td><b>${esc(a.time||'—')}</b></td>
+            <td>${esc(p ? patientName(p) : a.patientName || '—')}</td>
+            <td>${esc(doc ? (doc.name||doc.email) : '—')}</td>
+            <td class="text-gray-600">${esc((a.reason||'').slice(0,60))}</td>
+            <td><span class="badge ${statusColor}">${esc(a.status||'scheduled')}</span></td>
+            <td class="whitespace-nowrap">
+              ${a.status === 'scheduled' ? `<button onclick="apptSetStatus('${a.id}','checked-in')" class="text-blue-600 text-sm">Check in</button>` : ''}
+              ${a.status === 'checked-in' ? `<button onclick="apptSetStatus('${a.id}','completed')" class="text-green-600 text-sm">Complete</button>` : ''}
+              ${(a.status === 'scheduled' || a.status === 'checked-in') ? `<button onclick="apptSetStatus('${a.id}','cancelled')" class="text-red-600 text-sm ml-2">Cancel</button>` : ''}
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No appointments for this day. Click "+ Book Appointment".</p>'}
+    </div>`;
+}
+
+function apptQuickJump(dateStr) {
+  APPT_DATE = dateStr;
+  renderView('appointments');
+}
+
+async function newApptModal() {
+  await refreshPatients();
+  if (!CACHE.doctors) {
+    const docsSnap = await db.collection('users').where('role','==','doctor').get();
+    CACHE.doctors = docsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  }
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">Book Appointment</h3>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="ap_patient" class="input" placeholder="Type name…">
+      <div id="ap_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="label">Doctor</label>
+        <select id="ap_doctor" class="input">
+          <option value="">— Any —</option>
+          ${CACHE.doctors.map(d => `<option value="${d.id}">${esc(d.name||d.email)}</option>`).join('')}
+        </select>
+      </div>
+      <div><label class="label">Date *</label><input id="ap_date" type="date" class="input" value="${APPT_DATE}"></div>
+      <div><label class="label">Time *</label><input id="ap_time" type="time" class="input" value="09:00"></div>
+      <div><label class="label">Phone (for reminder)</label><input id="ap_phone" class="input"></div>
+      <div class="col-span-2"><label class="label">Reason / Notes</label><textarea id="ap_reason" class="input" rows="2" placeholder="e.g. Follow-up, review of lab results"></textarea></div>
+    </div>
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveAppt()" class="btn btn-primary">Book</button>
+    </div>
+  `, 'max-w-2xl');
+  patientPicker('ap_patient', (p) => {
+    const ph = document.getElementById('ap_phone');
+    if (ph && p.phone) ph.value = p.phone;
+  });
+}
+
+async function saveAppt() {
+  const inp = document.getElementById('ap_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const date = document.getElementById('ap_date').value;
+  const time = document.getElementById('ap_time').value;
+  if (!date || !time) return toast('Date and time required', 'error');
+  const p = CACHE.patients.find(x => x.id === patientId);
+  await db.collection('appointments').add({
+    patientId,
+    patientName: p ? patientName(p) : inp.value.trim(),
+    doctorId: document.getElementById('ap_doctor').value,
+    date, time,
+    phone: document.getElementById('ap_phone').value.trim(),
+    reason: document.getElementById('ap_reason').value.trim(),
+    status: 'scheduled',
+    createdBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  toast('Appointment booked', 'success');
+  closeModal();
+  APPT_DATE = date;
+  renderView('appointments');
+}
+
+async function apptSetStatus(id, status) {
+  await db.collection('appointments').doc(id).update({
+    status,
+    [`${status.replace('-','')}At`]: firebase.firestore.FieldValue.serverTimestamp(),
+    [`${status.replace('-','')}By`]: CURRENT_USER.uid
+  });
+  toast(`Marked ${status}`, 'success');
+  renderView('appointments');
+}
+
+function printApptSchedule() {
+  const el = document.getElementById('apptList');
+  if (!el) return;
+  const w = window.open('', '_blank');
+  w.document.write(`
+    <html><head><title>Appointment Schedule</title>
+    <style>
+      body{font-family:system-ui;padding:2rem}
+      h1{font-size:20px;text-align:center;margin:0 0 .5rem 0}
+      p.sub{text-align:center;font-size:12px;color:#555;margin:0 0 1rem 0}
+      table{width:100%;border-collapse:collapse}
+      th,td{padding:6px;border-bottom:1px solid #ccc;text-align:left;font-size:13px}
+      th{background:#f0f0f0}
+    </style></head><body>
+      <h1>StraightUpMedical</h1>
+      <p class="sub">Appointment Schedule — ${APPT_DATE}</p>
+      ${el.innerHTML}
+    </body></html>
+  `);
+  w.document.close();
+  w.print();
 }
 // ============================================================
 // PHARMACY MODULE
