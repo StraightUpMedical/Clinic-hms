@@ -148,6 +148,7 @@ const NAV_ITEMS = [
   { key: 'patients',      label: 'Patients',      roles: ['admin','doctor','nurse','lab','radiology','pharmacy','reception','cashier'] },
   { key: 'nurse',         label: 'Nurse / Triage',roles: ['admin','nurse','doctor'] },
   { key: 'consultation',  label: 'Consultation',  roles: ['admin','doctor'] },
+  { key: 'referral',       label: 'Referral',        roles: ['admin','doctor'] },
   { key: 'lab',           label: 'Laboratory',    roles: ['admin','lab','doctor','nurse'] },
   { key: 'radiology',     label: 'Radiology',     roles: ['admin','radiology','doctor'] },
   { key: 'pharmacy',      label: 'Pharmacy',      roles: ['admin','pharmacy','doctor'] },
@@ -231,6 +232,7 @@ async function renderView(key) {
     else if (key === 'patients')    await viewPatients(c);
     else if (key === 'nurse')       await viewNurse(c);
     else if (key === 'consultation')await viewConsultation(c);
+    else if (key === 'referral')    await viewReferral(c);  
     else if (key === 'lab')         await viewLab(c);
     else if (key === 'radiology')   await viewRadiology(c);
     else if (key === 'pharmacy')    await viewPharmacy(c);
@@ -442,6 +444,7 @@ async function openPatient(patientId) {
     <div class="flex flex-wrap gap-2 mb-4">
       <button onclick="closeModal();goNurse('${patientId}')" class="btn btn-primary text-sm">+ Vitals</button>
       <button onclick="closeModal();goConsult('${patientId}')" class="btn btn-primary text-sm">+ Consultation</button>
+      <button onclick="closeModal();goReferral('${patientId}')" class="btn btn-primary text-sm">+ Referral</button>
       <button onclick="closeModal();goLab('${patientId}')" class="btn btn-primary text-sm">+ Lab Order</button>
       <button onclick="closeModal();goRadiology('${patientId}')" class="btn btn-primary text-sm">+ Radiology</button>
       <button onclick="closeModal();goPharmacy('${patientId}')" class="btn btn-primary text-sm">+ Prescription</button>
@@ -468,7 +471,7 @@ function goLab(pid)        { renderView('lab');          setTimeout(()=>labSelec
 function goRadiology(pid)  { renderView('radiology');    setTimeout(()=>radSelectPatient(pid), 100); }
 function goPharmacy(pid)   { renderView('pharmacy');     setTimeout(()=>pharmSelectPatient(pid), 100); }
 function goPayment(pid)    { renderView('payments');     setTimeout(()=>paySelectPatient(pid), 100); }
-
+function goReferral(pid)   { renderView('referral');   setTimeout(()=>referralSelectPatient(pid), 100); }
 async function openEvent(type, id) {
   const collMap = { Visit:'visits', Vitals:'vitals', Lab:'labOrders', Radiology:'radiologyOrders', Prescription:'prescriptions', Payment:'payments' };
   const snap = await db.collection(collMap[type]).doc(id).get();
@@ -1398,7 +1401,208 @@ async function delRadTest(id) {
     toast('Delete failed: ' + e.message, 'error');
   }
 }
+// ============================================================
+// REFERRAL MODULE
+// ============================================================
+async function viewReferral(c) {
+  await refreshPatients();
+  const snap = await db.collection('referrals').orderBy('createdAt','desc').limit(100).get();
+  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const todayRefs = items.filter(r => r.date === todayStr());
 
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-bold">Referrals</h2>
+      <button onclick="referralNewModal()" class="btn btn-primary">+ New Referral</button>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Today's Referrals (${todayRefs.length})</h3>
+      ${todayRefs.length ? `<table><thead><tr>
+        <th>Time</th><th>Patient</th><th>Referred To</th><th>Reason</th><th></th>
+      </tr></thead><tbody>
+        ${todayRefs.map(r => {
+          const p = CACHE.patients.find(x => x.id === r.patientId);
+          return `<tr>
+            <td>${fmtDate(r.createdAt)}</td>
+            <td>${esc(p ? patientName(p) : r.patientName || '—')}</td>
+            <td>${esc(r.referredTo||'—')}</td>
+            <td class="text-gray-600">${esc((r.reason||'').slice(0,60))}${(r.reason||'').length>60?'…':''}</td>
+            <td><button onclick="referralPrint('${r.id}')" class="text-blue-600 text-sm">Print</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No referrals today.</p>'}
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">All Referrals (last 100)</h3>
+      ${items.length ? `<table><thead><tr>
+        <th>Date</th><th>Patient</th><th>Referred To</th><th>Doctor</th><th></th>
+      </tr></thead><tbody>
+        ${items.map(r => {
+          const p = CACHE.patients.find(x => x.id === r.patientId);
+          return `<tr>
+            <td>${esc(r.date||'')}</td>
+            <td>${esc(p ? patientName(p) : r.patientName || '—')}</td>
+            <td>${esc(r.referredTo||'—')}</td>
+            <td>${esc(r.doctorName||'')}</td>
+            <td><button onclick="referralPrint('${r.id}')" class="text-blue-600 text-sm">Print</button></td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No referrals yet.</p>'}
+    </div>`;
+}
+
+function referralSelectPatient(pid) { referralNewModal(pid); }
+
+function referralNewModal(pid) {
+  const p = pid ? CACHE.patients.find(x => x.id === pid) : null;
+  const today = todayStr();
+  const age = p && p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 3.154e10) : '';
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">New Referral</h3>
+
+    <h4 class="font-semibold text-sm mb-2 text-gray-700">Patient Details</h4>
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="rf_patient" class="input" placeholder="Type name…" ${pid ? 'disabled' : ''} value="${p ? esc(patientName(p)) : ''}" data-patient-id="${pid||''}">
+      <div id="rf_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="label">Gender</label><input id="rf_gender" class="input" value="${p ? esc(p.gender||'') : ''}"></div>
+      <div><label class="label">Age</label><input id="rf_age" class="input" value="${age}"></div>
+      <div><label class="label">Date</label><input id="rf_date" type="date" class="input" value="${today}"></div>
+      <div><label class="label">Next of Kin</label><input id="rf_kin" class="input" value="${p ? esc(p.kin||'') : ''}"></div>
+      <div class="col-span-2"><label class="label">Residence</label><input id="rf_residence" class="input" value="${p ? esc(p.address||'') : ''}"></div>
+      <div class="col-span-2"><label class="label">Referred To (facility / department)</label><input id="rf_to" class="input" placeholder="e.g. Kenyatta National Hospital — Orthopedics"></div>
+    </div>
+
+    <h4 class="font-semibold text-sm mb-2 mt-4 text-gray-700">Clinical Details</h4>
+    <div class="grid grid-cols-1 gap-3">
+      <div><label class="label">Presenting Symptoms and Signs</label><textarea id="rf_symptoms" class="input" rows="3"></textarea></div>
+      <div><label class="label">Management Done</label><textarea id="rf_management" class="input" rows="3"></textarea></div>
+      <div><label class="label">Medication / Instructions</label><textarea id="rf_meds" class="input" rows="3"></textarea></div>
+      <div><label class="label">Reason for Referral</label><textarea id="rf_reason" class="input" rows="3"></textarea></div>
+    </div>
+
+    <h4 class="font-semibold text-sm mb-2 mt-4 text-gray-700">Signing Doctor</h4>
+    <div class="grid grid-cols-2 gap-3">
+      <div class="col-span-2"><label class="label">Full Name of Doctor</label><input id="rf_doctor" class="input" value="${esc(CURRENT_USER.name || CURRENT_USER.email)}"></div>
+      <div><label class="label">Signature</label><input id="rf_signature" class="input" placeholder="Type initials or leave blank"></div>
+      <div><label class="label">Date</label><input id="rf_sigDate" type="date" class="input" value="${today}"></div>
+    </div>
+
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveReferral()" class="btn btn-primary">Save & Print Referral</button>
+    </div>
+  `, 'max-w-3xl');
+
+  patientPicker('rf_patient', (pt) => {
+    const age = pt.dob ? Math.floor((Date.now() - new Date(pt.dob)) / 3.154e10) : '';
+    document.getElementById('rf_gender').value = pt.gender || '';
+    document.getElementById('rf_age').value = age;
+    document.getElementById('rf_kin').value = pt.kin || '';
+    document.getElementById('rf_residence').value = pt.address || '';
+  });
+  if (pid && p) {
+    const inp = document.getElementById('rf_patient');
+    inp.dataset.patientId = pid;
+  }
+}
+
+async function saveReferral() {
+  const inp = document.getElementById('rf_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select patient', 'error');
+  const referredTo = document.getElementById('rf_to').value.trim();
+  if (!referredTo) return toast('Referred-to facility is required', 'error');
+  const reason = document.getElementById('rf_reason').value.trim();
+  if (!reason) return toast('Reason for referral is required', 'error');
+
+  const p = CACHE.patients.find(x => x.id === patientId);
+  const data = {
+    patientId,
+    patientName: p ? patientName(p) : inp.value.trim(),
+    gender: document.getElementById('rf_gender').value.trim(),
+    age: document.getElementById('rf_age').value.trim(),
+    date: document.getElementById('rf_date').value,
+    kin: document.getElementById('rf_kin').value.trim(),
+    residence: document.getElementById('rf_residence').value.trim(),
+    referredTo,
+    symptoms: document.getElementById('rf_symptoms').value.trim(),
+    management: document.getElementById('rf_management').value.trim(),
+    medications: document.getElementById('rf_meds').value.trim(),
+    reason,
+    doctorName: document.getElementById('rf_doctor').value.trim(),
+    signature: document.getElementById('rf_signature').value.trim(),
+    sigDate: document.getElementById('rf_sigDate').value,
+    createdBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  const ref = await db.collection('referrals').add(data);
+  toast('Referral saved', 'success');
+  closeModal();
+  renderView('referral');
+  setTimeout(() => referralPrint(ref.id), 300);
+}
+
+async function referralPrint(id) {
+  const doc = await db.collection('referrals').doc(id).get();
+  if (!doc.exists) return toast('Referral not found', 'error');
+  const r = doc.data();
+  const p = CACHE.patients.find(x => x.id === r.patientId);
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Referral Letter</h3>
+      <div><button onclick="window.print()" class="btn btn-primary text-sm">🖨 Print</button>
+      <button onclick="closeModal()" class="btn btn-secondary text-sm">Close</button></div>
+    </div>
+
+    <div id="printArea" style="font-family:Georgia,serif;padding:2rem;line-height:1.6">
+      <div style="text-align:center;border-bottom:2px solid #333;padding-bottom:.5rem;margin-bottom:1rem">
+        <h1 style="margin:0;font-size:22px">CLINIC HMS</h1>
+        <p style="margin:0;font-size:12px;color:#555">Referral Letter</p>
+      </div>
+
+      <p style="margin:0 0 .5rem 0"><b>Date:</b> ${esc(r.date||'')}</p>
+      <p style="margin:0 0 .5rem 0"><b>To:</b> ${esc(r.referredTo||'')}</p>
+
+      <table style="width:100%;border:none;margin:1rem 0;font-size:14px">
+        <tr>
+          <td style="border:none;padding:2px"><b>Patient Name:</b> ${esc(r.patientName||'')}</td>
+          <td style="border:none;padding:2px"><b>Gender:</b> ${esc(r.gender||'—')}</td>
+        </tr>
+        <tr>
+          <td style="border:none;padding:2px"><b>Age:</b> ${esc(r.age||'—')}</td>
+          <td style="border:none;padding:2px"><b>Next of Kin:</b> ${esc(r.kin||'—')}</td>
+        </tr>
+        <tr>
+          <td style="border:none;padding:2px" colspan="2"><b>Residence:</b> ${esc(r.residence||'—')}</td>
+        </tr>
+      </table>
+
+      <p style="margin:1rem 0 .3rem 0"><b>Presenting Symptoms and Signs:</b></p>
+      <p style="margin:0 0 1rem 0;white-space:pre-wrap">${esc(r.symptoms||'—')}</p>
+
+      <p style="margin:1rem 0 .3rem 0"><b>Management Done:</b></p>
+      <p style="margin:0 0 1rem 0;white-space:pre-wrap">${esc(r.management||'—')}</p>
+
+      <p style="margin:1rem 0 .3rem 0"><b>Medication / Instructions:</b></p>
+      <p style="margin:0 0 1rem 0;white-space:pre-wrap">${esc(r.medications||'—')}</p>
+
+      <p style="margin:1rem 0 .3rem 0"><b>Reason for Referral:</b></p>
+      <p style="margin:0 0 2rem 0;white-space:pre-wrap">${esc(r.reason||'—')}</p>
+
+      <div style="margin-top:3rem">
+        <p style="margin:0"><b>Referrer:</b> ${esc(r.doctorName||'')}</p>
+        <p style="margin:0"><b>Signature:</b> ${esc(r.signature||'____________________')}</p>
+        <p style="margin:0"><b>Date:</b> ${esc(r.sigDate||r.date||'')}</p>
+      </div>
+    </div>
+  `, 'max-w-3xl');
+}
 // ============================================================
 // PHARMACY MODULE
 // ============================================================
