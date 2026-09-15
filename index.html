@@ -162,6 +162,7 @@ const NAV_ITEMS = [
   { key: 'pharmacy',      label: 'Pharmacy',      roles: ['admin','pharmacy','doctor'] },
   { key: 'orthopedics',   label: 'Orthopedics',   roles: ['admin','doctor'] },
   { key: 'payments',      label: 'Payments',      roles: ['admin','cashier','reception'] },
+  { key: 'reports', label: 'Reports', roles: ['admin','doctor','cashier'] },
   { key: 'admin',         label: 'Admin',         roles: ['admin'] }
 ];
 
@@ -248,6 +249,7 @@ async function renderView(key) {
     else if (key === 'pharmacy')    await viewPharmacy(c);
     else if (key === 'orthopedics') await viewOrthopedics(c);
     else if (key === 'payments')    await viewPayments(c);
+    else if (key === 'reports') await viewReports(c);  
     else if (key === 'admin')       await viewAdmin(c);
   } catch (e) {
     console.error(e);
@@ -2647,7 +2649,172 @@ async function printReceipt(paymentId) {
     </div>`;
   openModal(html, 'max-w-md');
 }
+// ============================================================
+// REPORTS MODULE
+// ============================================================
+let REPORT_DATE = new Date().toISOString().slice(0,10);
 
+async function viewReports(c) {
+  const d = REPORT_DATE;
+  const [visitsSnap, paysSnap, consSnap, labSnap, rxSnap, vitalsSnap, patsSnap] = await Promise.all([
+    db.collection('visits').where('date','==',d).get(),
+    db.collection('payments').where('date','==',d).get(),
+    db.collection('consultations').where('date','==',d).get(),
+    db.collection('labOrders').where('date','==',d).get(),
+    db.collection('prescriptions').where('date','==',d).get(),
+    db.collection('vitals').where('date','==',d).get(),
+    db.collection('patients').get()
+  ]);
+
+  const visits = visitsSnap.docs.map(x => ({ id: x.id, ...x.data() }));
+  const pays = paysSnap.docs.map(x => ({ id: x.id, ...x.data() }));
+  const cons = consSnap.docs.map(x => ({ id: x.id, ...x.data() }));
+  const labs = labSnap.docs.map(x => ({ id: x.id, ...x.data() }));
+  const rxs = rxSnap.docs.map(x => ({ id: x.id, ...x.data() }));
+  const vitals = vitalsSnap.docs.map(x => ({ id: x.id, ...x.data() }));
+
+  const byMode = {};
+  pays.forEach(p => { byMode[p.mode] = (byMode[p.mode]||0) + (p.amount||0); });
+  const revenue = pays.reduce((s,p) => s + (p.amount||0), 0);
+
+  const newRegs = patsSnap.docs.filter(doc => {
+    const ts = doc.data().createdAt;
+    if (!ts) return false;
+    const dt = ts.toDate ? ts.toDate() : new Date(ts);
+    return dt.toISOString().slice(0,10) === d;
+  }).length;
+
+  // drug totals
+  const drugTotals = {};
+  rxs.forEach(r => (r.items||[]).forEach(i => {
+    const key = `${i.name}`;
+    drugTotals[key] = (drugTotals[key]||0) + (i.qty||0);
+  }));
+  const drugList = Object.entries(drugTotals).sort((a,b) => b[1]-a[1]);
+
+  // lab tests totals
+  const labTotals = {};
+  labs.forEach(o => (o.tests||[]).forEach(t => {
+    labTotals[t.name] = (labTotals[t.name]||0) + 1;
+  }));
+  const labList = Object.entries(labTotals).sort((a,b) => b[1]-a[1]);
+
+  const yesterday = new Date(d); yesterday.setDate(yesterday.getDate()-1);
+  const tomorrow = new Date(d); tomorrow.setDate(tomorrow.getDate()+1);
+  const yStr = yesterday.toISOString().slice(0,10);
+  const tStr = tomorrow.toISOString().slice(0,10);
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+      <h2 class="text-2xl font-bold">Daily Report</h2>
+      <div class="flex gap-2">
+        <button onclick="reportJump('${yStr}')" class="btn btn-secondary text-sm">← Prev</button>
+        <button onclick="reportJump('${todayStr()}')" class="btn btn-secondary text-sm">Today</button>
+        <button onclick="reportJump('${tStr}')" class="btn btn-secondary text-sm">Next →</button>
+        <button onclick="printDailyReport()" class="btn btn-primary text-sm">🖨 Print Report</button>
+      </div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <label class="label">Report date</label>
+      <input type="date" class="input" style="width:auto" value="${d}" onchange="reportJump(this.value)">
+    </div>
+
+    <div id="reportBody">
+      <div class="text-center mb-4">
+        <img src="logo.png" alt="Logo" style="max-width:130px;margin:0 auto .3rem auto;display:block">
+        <h1 class="text-2xl font-bold">StraightUpMedical</h1>
+        <p class="text-sm text-gray-500">Daily Operations Report — ${esc(d)}</p>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div class="card p-3"><div class="text-xs text-gray-500">Patients Seen</div><div class="text-2xl font-bold">${visits.length}</div></div>
+        <div class="card p-3"><div class="text-xs text-gray-500">Revenue (KES)</div><div class="text-2xl font-bold">${revenue.toLocaleString()}</div></div>
+        <div class="card p-3"><div class="text-xs text-gray-500">Consultations</div><div class="text-2xl font-bold">${cons.length}</div></div>
+        <div class="card p-3"><div class="text-xs text-gray-500">New Registrations</div><div class="text-2xl font-bold">${newRegs}</div></div>
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Revenue by Mode</h3>
+        ${Object.keys(byMode).length ? `<table><thead><tr><th>Mode</th><th>Amount (KES)</th></tr></thead><tbody>
+          ${Object.entries(byMode).map(([m,a]) => `<tr><td>${esc(m)}</td><td><b>${a.toLocaleString()}</b></td></tr>`).join('')}
+          <tr style="background:#f9fafb"><td><b>Total</b></td><td><b>${revenue.toLocaleString()}</b></td></tr>
+        </tbody></table>` : '<p class="text-gray-400">No payments recorded.</p>'}
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Diagnoses (${cons.length})</h3>
+        ${cons.length ? `<table><thead><tr><th>Patient</th><th>Diagnosis</th><th>Treatment</th></tr></thead><tbody>
+          ${cons.map(x => {
+            const p = CACHE.patients.find(y => y.id === x.patientId);
+            return `<tr>
+              <td>${esc(p ? patientName(p) : '—')}</td>
+              <td>${esc(x.diagnosis||'—')}</td>
+              <td class="text-gray-600">${esc((x.treatment||'').slice(0,80))}</td>
+            </tr>`;
+          }).join('')}
+        </tbody></table>` : '<p class="text-gray-400">No consultations.</p>'}
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Lab Orders (${labs.length})</h3>
+        ${labs.length ? `<table><thead><tr><th>Patient</th><th>Tests</th><th>Status</th></tr></thead><tbody>
+          ${labs.map(x => {
+            const p = CACHE.patients.find(y => y.id === x.patientId);
+            const color = x.status === 'ready' ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700';
+            return `<tr>
+              <td>${esc(p ? patientName(p) : '—')}</td>
+              <td>${esc((x.tests||[]).map(t=>t.name).join(', '))}</td>
+              <td><span class="badge ${color}">${esc(x.status)}</span></td>
+            </tr>`;
+          }).join('')}
+        </tbody></table>` : '<p class="text-gray-400">No lab orders.</p>'}
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Drugs Dispensed / Prescribed</h3>
+        ${drugList.length ? `<table><thead><tr><th>Drug</th><th>Total Qty</th></tr></thead><tbody>
+          ${drugList.map(([name, qty]) => `<tr><td>${esc(name)}</td><td><b>${qty}</b></td></tr>`).join('')}
+        </tbody></table>` : '<p class="text-gray-400">No prescriptions.</p>'}
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Vitals Recorded</h3>
+        <p><b>${vitals.length}</b> triage entries logged today.</p>
+      </div>
+    </div>
+  `;
+}
+
+function reportJump(d) {
+  REPORT_DATE = d;
+  renderView('reports');
+}
+
+function printDailyReport() {
+  const el = document.getElementById('reportBody');
+  if (!el) return;
+  const w = window.open('', '_blank');
+  w.document.write(`
+    <html><head><title>Daily Report — ${REPORT_DATE}</title>
+    <style>
+      body{font-family:system-ui;padding:2rem;max-width:800px;margin:auto}
+      h1{font-size:22px;margin:0;text-align:center}
+      h3{font-size:14px;margin-top:1.5rem;border-bottom:1px solid #ccc;padding-bottom:3px}
+      p{font-size:13px}
+      table{width:100%;border-collapse:collapse;margin-top:.5rem}
+      th,td{padding:5px;border-bottom:1px solid #ccc;text-align:left;font-size:12px}
+      th{background:#f0f0f0}
+      .badge{padding:2px 6px;border-radius:3px;font-size:11px}
+      .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:1rem}
+      .card{background:#f9fafb;padding:8px;border-radius:4px}
+      .card b{display:block;font-size:18px}
+      img{max-width:130px}
+    </style></head><body>${el.innerHTML}</body></html>
+  `);
+  w.document.close();
+  w.print();
+}
 // ============================================================
 // ADMIN MODULE
 // ============================================================
