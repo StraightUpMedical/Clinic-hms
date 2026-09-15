@@ -1270,7 +1270,6 @@ async function radReportView(orderId) {
     </div>
   `);
 }
-
 async function manageRadCatalog() {
   const snap = await db.collection('radiologyTests').orderBy('name').get();
   const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -1279,15 +1278,17 @@ async function manageRadCatalog() {
       <h3 class="text-xl font-bold">Radiology Catalog</h3>
       <button onclick="closeModal()" class="btn btn-secondary">Close</button>
     </div>
-    <div class="flex gap-2 mb-3">
-      <input id="rc_name" class="input" placeholder="Study (e.g. Ultrasound Abdomen)">
-      <input id="rc_price" type="number" class="input" placeholder="KES" style="max-width:100px">
-      <button onclick="addRadTest()" class="btn btn-primary">Add</button>
+    <div class="grid grid-cols-12 gap-2 mb-3">
+      <input id="rc_name" class="input col-span-5" placeholder="Study (e.g. Chest X-Ray PA)">
+      <input id="rc_category" class="input col-span-3" placeholder="Category (e.g. X-Ray)">
+      <input id="rc_price" type="number" class="input col-span-2" placeholder="KES">
+      <button onclick="addRadTest()" class="btn btn-primary col-span-2">+ Add</button>
     </div>
     <div class="max-h-96 overflow-y-auto">
-    <table><thead><tr><th>Study</th><th>Price</th><th></th></tr></thead><tbody>
-      ${items.map(t => `<tr id="rc_row_${t.id}">
+    <table><thead><tr><th>Study</th><th>Category</th><th>Price</th><th></th></tr></thead><tbody>
+      ${items.length ? items.map(t => `<tr id="rc_row_${t.id}">
         <td><input class="input rc-edit-name" value="${esc(t.name)}" style="display:none"><span class="rc-view-name">${esc(t.name)}</span></td>
+        <td><input class="input rc-edit-cat" value="${esc(t.category||'')}" style="display:none"><span class="rc-view-cat">${esc(t.category||'—')}</span></td>
         <td><input type="number" class="input rc-edit-price" value="${t.price||0}" style="display:none"><span class="rc-view-price">${t.price||0}</span></td>
         <td class="whitespace-nowrap">
           <button class="rc-edit-btn text-blue-600 text-sm" onclick="editRadRow('${t.id}')">Edit</button>
@@ -1295,16 +1296,16 @@ async function manageRadCatalog() {
           <button class="rc-cancel-btn text-gray-500 text-sm hidden" onclick="cancelRadRow('${t.id}')">Cancel</button>
           <button class="rc-del-btn text-red-600 text-sm ml-2" onclick="delRadTest('${t.id}')">Delete</button>
         </td>
-      </tr>`).join('')}
+      </tr>`).join('') : '<tr><td colspan="4" class="text-center py-6 text-gray-400">No studies yet. Add one above.</td></tr>'}
     </tbody></table>
     </div>
-  `, 'max-w-2xl');
+  `, 'max-w-3xl');
 }
 
 function editRadRow(id) {
   const row = document.getElementById('rc_row_' + id);
-  row.querySelectorAll('.rc-edit-name, .rc-edit-price').forEach(i => i.style.display = '');
-  row.querySelectorAll('.rc-view-name, .rc-view-price').forEach(s => s.style.display = 'none');
+  row.querySelectorAll('.rc-edit-name, .rc-edit-cat, .rc-edit-price').forEach(i => i.style.display = '');
+  row.querySelectorAll('.rc-view-name, .rc-view-cat, .rc-view-price').forEach(s => s.style.display = 'none');
   row.querySelector('.rc-edit-btn').classList.add('hidden');
   row.querySelector('.rc-del-btn').classList.add('hidden');
   row.querySelector('.rc-save-btn').classList.remove('hidden');
@@ -1313,8 +1314,8 @@ function editRadRow(id) {
 
 function cancelRadRow(id) {
   const row = document.getElementById('rc_row_' + id);
-  row.querySelectorAll('.rc-edit-name, .rc-edit-price').forEach(i => i.style.display = 'none');
-  row.querySelectorAll('.rc-view-name, .rc-view-price').forEach(s => s.style.display = '');
+  row.querySelectorAll('.rc-edit-name, .rc-edit-cat, .rc-edit-price').forEach(i => i.style.display = 'none');
+  row.querySelectorAll('.rc-view-name, .rc-view-cat, .rc-view-price').forEach(s => s.style.display = '');
   row.querySelector('.rc-edit-btn').classList.remove('hidden');
   row.querySelector('.rc-del-btn').classList.remove('hidden');
   row.querySelector('.rc-save-btn').classList.add('hidden');
@@ -1325,13 +1326,51 @@ async function saveRadRow(id) {
   const row = document.getElementById('rc_row_' + id);
   const name = row.querySelector('.rc-edit-name').value.trim();
   if (!name) return toast('Name required', 'error');
+  const category = row.querySelector('.rc-edit-cat').value.trim();
   const price = parseFloat(row.querySelector('.rc-edit-price').value) || 0;
-  await db.collection('radiologyTests').doc(id).update({ name, price });
-  toast('Updated', 'success');
-  row.querySelector('.rc-view-name').textContent = name;
-  row.querySelector('.rc-view-price').textContent = price;
-  cancelRadRow(id);
+  try {
+    await db.collection('radiologyTests').doc(id).update({ name, category, price });
+    toast('Updated', 'success');
+    row.querySelector('.rc-view-name').textContent = name;
+    row.querySelector('.rc-view-cat').textContent = category || '—';
+    row.querySelector('.rc-view-price').textContent = price;
+    cancelRadRow(id);
+  } catch (e) {
+    console.error(e);
+    toast('Update failed: ' + e.message, 'error');
+  }
 }
+
+async function addRadTest() {
+  const name = document.getElementById('rc_name').value.trim();
+  if (!name) return toast('Name required', 'error');
+  try {
+    await db.collection('radiologyTests').add({
+      name,
+      category: document.getElementById('rc_category').value.trim(),
+      price: parseFloat(document.getElementById('rc_price').value) || 0,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    toast('Study added', 'success');
+    manageRadCatalog();
+  } catch (e) {
+    console.error(e);
+    toast('Add failed: ' + e.message, 'error');
+  }
+}
+
+async function delRadTest(id) {
+  if (!confirm('Delete this study?')) return;
+  try {
+    await db.collection('radiologyTests').doc(id).delete();
+    toast('Deleted', 'success');
+    manageRadCatalog();
+  } catch (e) {
+    console.error(e);
+    toast('Delete failed: ' + e.message, 'error');
+  }
+}
+
 // ============================================================
 // PHARMACY MODULE
 // ============================================================
