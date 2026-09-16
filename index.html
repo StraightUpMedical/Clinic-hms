@@ -1151,6 +1151,205 @@ async function seedStandardLabCatalog() {
   toast(`${created} tests added, ${skipped} skipped (already existed)`, 'success');
   if (typeof manageLabCatalog === 'function') manageLabCatalog();
 }
+  // ============================================================
+// SEED STANDARD KENYAN CLINIC DRUG CATALOG
+// ============================================================
+async function seedStandardDrugCatalog() {
+  if (!confirm('Load ~85 common Kenyan clinic drugs?\n\nExisting drugs with the same name will NOT be overwritten.')) return;
+
+  const catalog = [
+    // ---- ANALGESICS / ANTIPYRETICS ----
+    { name: 'Paracetamol', form: 'Tablet', strength: '500mg', price: 10, stock: 500, reorder: 100 },
+    { name: 'Paracetamol Syrup', form: 'Syrup', strength: '120mg/5ml', price: 150, stock: 40, reorder: 10 },
+    { name: 'Paracetamol Syrup', form: 'Syrup', strength: '250mg/5ml', price: 200, stock: 30, reorder: 10 },
+    { name: 'Ibuprofen', form: 'Tablet', strength: '400mg', price: 15, stock: 300, reorder: 60 },
+    { name: 'Ibuprofen Syrup', form: 'Syrup', strength: '100mg/5ml', price: 180, stock: 25, reorder: 8 },
+    { name: 'Diclofenac', form: 'Tablet', strength: '50mg', price: 15, stock: 250, reorder: 50 },
+    { name: 'Diclofenac Gel', form: 'Gel', strength: '1%', price: 350, stock: 20, reorder: 5 },
+    { name: 'Aspirin', form: 'Tablet', strength: '75mg', price: 8, stock: 200, reorder: 40 },
+    { name: 'Aspirin', form: 'Tablet', strength: '300mg', price: 10, stock: 150, reorder: 30 },
+    { name: 'Naproxen', form: 'Tablet', strength: '250mg', price: 25, stock: 100, reorder: 20 },
+    { name: 'Tramadol', form: 'Capsule', strength: '50mg', price: 40, stock: 80, reorder: 20 },
+    { name: 'Morphine', form: 'Injection', strength: '10mg/ml', price: 150, stock: 20, reorder: 5 },
+
+    // ---- ANTIBIOTICS ----
+    { name: 'Amoxicillin', form: 'Capsule', strength: '250mg', price: 15, stock: 300, reorder: 60 },
+    { name: 'Amoxicillin', form: 'Capsule', strength: '500mg', price: 20, stock: 200, reorder: 40 },
+    { name: 'Amoxicillin Syrup', form: 'Syrup', strength: '125mg/5ml', price: 180, stock: 30, reorder: 8 },
+    { name: 'Amoxicillin Syrup', form: 'Syrup', strength: '250mg/5ml', price: 250, stock: 25, reorder: 8 },
+    { name: 'Amoxicillin-Clavulanate', form: 'Tablet', strength: '500mg/125mg', price: 60, stock: 100, reorder: 20 },
+    { name: 'Amoxicillin-Clavulanate Syrup', form: 'Syrup', strength: '228mg/5ml', price: 450, stock: 20, reorder: 5 },
+    { name: 'Ampicillin', form: 'Capsule', strength: '500mg', price: 20, stock: 150, reorder: 30 },
+    { name: 'Azithromycin', form: 'Tablet', strength: '250mg', price: 100, stock: 100, reorder: 20 },
+    { name: 'Azithromycin', form: 'Tablet', strength: '500mg', price: 180, stock: 80, reorder: 15 },
+    { name: 'Azithromycin Syrup', form: 'Syrup', strength: '200mg/5ml', price: 500, stock: 15, reorder: 4 },
+    { name: 'Cefixime', form: 'Tablet', strength: '200mg', price: 80, stock: 100, reorder: 20 },
+    { name: 'Ceftriaxone', form: 'Injection', strength: '1g', price: 250, stock: 50, reorder: 10 },
+    { name: 'Ciprofloxacin', form: 'Tablet', strength: '500mg', price: 30, stock: 200, reorder: 40 },
+    { name: 'Ciprofloxacin', form: 'Infusion', strength: '200mg/100ml', price: 350, stock: 20, reorder: 5 },
+    { name: 'Clarithromycin', form: 'Tablet', strength: '500mg', price: 120, stock: 60, reorder: 15 },
+    { name: 'Cloxacillin', form: 'Capsule', strength: '500mg', price: 25, stock: 150, reorder: 30 },
+    { name: 'Cotrimoxazole', form: 'Tablet', strength: '480mg', price: 10, stock: 400, reorder: 80 },
+    { name: 'Cotrimoxazole Syrup', form: 'Syrup', strength: '240mg/5ml', price: 150, stock: 40, reorder: 10 },
+    { name: 'Doxycycline', form: 'Capsule', strength: '100mg', price: 15, stock: 250, reorder: 50 },
+    { name: 'Erythromycin', form: 'Tablet', strength: '500mg', price: 30, stock: 150, reorder: 30 },
+    { name: 'Gentamicin', form: 'Injection', strength: '40mg/ml', price: 60, stock: 40, reorder: 10 },
+    { name: 'Metronidazole', form: 'Tablet', strength: '200mg', price: 10, stock: 300, reorder: 60 },
+    { name: 'Metronidazole', form: 'Tablet', strength: '400mg', price: 18, stock: 250, reorder: 50 },
+    { name: 'Metronidazole Syrup', form: 'Syrup', strength: '200mg/5ml', price: 200, stock: 25, reorder: 8 },
+    { name: 'Metronidazole Infusion', form: 'Infusion', strength: '500mg/100ml', price: 300, stock: 15, reorder: 5 },
+    { name: 'Nitrofurantoin', form: 'Capsule', strength: '100mg', price: 40, stock: 100, reorder: 20 },
+    { name: 'Norfloxacin', form: 'Tablet', strength: '400mg', price: 30, stock: 150, reorder: 30 },
+    { name: 'Penicillin V', form: 'Tablet', strength: '250mg', price: 15, stock: 200, reorder: 40 },
+
+    // ---- ANTI-MALARIALS ----
+    { name: 'Artemether/Lumefantrine', form: 'Tablet', strength: '20/120mg', price: 30, stock: 400, reorder: 80 },
+    { name: 'Artemether/Lumefantrine (Pediatric)', form: 'Tablet', strength: '20/120mg (6-pack)', price: 25, stock: 150, reorder: 30 },
+    { name: 'Artemether Injection', form: 'Injection', strength: '80mg/ml', price: 350, stock: 30, reorder: 8 },
+    { name: 'Artesunate', form: 'Injection', strength: '60mg', price: 400, stock: 25, reorder: 8 },
+    { name: 'Quinine', form: 'Tablet', strength: '300mg', price: 30, stock: 150, reorder: 30 },
+    { name: 'Quinine Syrup', form: 'Syrup', strength: '100mg/5ml', price: 250, stock: 20, reorder: 5 },
+    { name: 'Sulfadoxine/Pyrimethamine', form: 'Tablet', strength: '500/25mg', price: 50, stock: 100, reorder: 20 },
+
+    // ---- ANTIPARASITICS ----
+    { name: 'Albendazole', form: 'Tablet', strength: '400mg', price: 30, stock: 150, reorder: 30 },
+    { name: 'Albendazole Syrup', form: 'Syrup', strength: '200mg/5ml', price: 250, stock: 25, reorder: 8 },
+    { name: 'Mebendazole', form: 'Tablet', strength: '100mg', price: 20, stock: 150, reorder: 30 },
+    { name: 'Praziquantel', form: 'Tablet', strength: '600mg', price: 60, stock: 80, reorder: 20 },
+    { name: 'Ivermectin', form: 'Tablet', strength: '3mg', price: 40, stock: 60, reorder: 15 },
+
+    // ---- CARDIOVASCULAR ----
+    { name: 'Amlodipine', form: 'Tablet', strength: '5mg', price: 15, stock: 300, reorder: 60 },
+    { name: 'Amlodipine', form: 'Tablet', strength: '10mg', price: 20, stock: 200, reorder: 40 },
+    { name: 'Atenolol', form: 'Tablet', strength: '50mg', price: 15, stock: 200, reorder: 40 },
+    { name: 'Atenolol', form: 'Tablet', strength: '100mg', price: 20, stock: 150, reorder: 30 },
+    { name: 'Enalapril', form: 'Tablet', strength: '5mg', price: 20, stock: 150, reorder: 30 },
+    { name: 'Enalapril', form: 'Tablet', strength: '10mg', price: 25, stock: 120, reorder: 25 },
+    { name: 'Losartan', form: 'Tablet', strength: '50mg', price: 30, stock: 150, reorder: 30 },
+    { name: 'Captopril', form: 'Tablet', strength: '25mg', price: 15, stock: 150, reorder: 30 },
+    { name: 'Hydrochlorothiazide', form: 'Tablet', strength: '25mg', price: 12, stock: 200, reorder: 40 },
+    { name: 'Nifedipine', form: 'Tablet', strength: '20mg (SR)', price: 25, stock: 150, reorder: 30 },
+    { name: 'Simvastatin', form: 'Tablet', strength: '20mg', price: 25, stock: 150, reorder: 30 },
+    { name: 'Atorvastatin', form: 'Tablet', strength: '20mg', price: 40, stock: 120, reorder: 25 },
+    { name: 'Aspirin', form: 'Tablet', strength: '75mg (cardio)', price: 8, stock: 300, reorder: 60 },
+    { name: 'Furosemide', form: 'Tablet', strength: '40mg', price: 12, stock: 200, reorder: 40 },
+    { name: 'Furosemide Injection', form: 'Injection', strength: '20mg/2ml', price: 60, stock: 40, reorder: 10 },
+    { name: 'Spironolactone', form: 'Tablet', strength: '25mg', price: 25, stock: 100, reorder: 20 },
+    { name: 'Digoxin', form: 'Tablet', strength: '0.25mg', price: 15, stock: 100, reorder: 20 },
+    { name: 'Warfarin', form: 'Tablet', strength: '5mg', price: 20, stock: 80, reorder: 20 },
+    { name: 'Clopidogrel', form: 'Tablet', strength: '75mg', price: 35, stock: 100, reorder: 20 },
+
+    // ---- DIABETES ----
+    { name: 'Metformin', form: 'Tablet', strength: '500mg', price: 10, stock: 400, reorder: 80 },
+    { name: 'Metformin', form: 'Tablet', strength: '850mg', price: 15, stock: 250, reorder: 50 },
+    { name: 'Glibenclamide', form: 'Tablet', strength: '5mg', price: 12, stock: 200, reorder: 40 },
+    { name: 'Gliclazide', form: 'Tablet', strength: '80mg', price: 20, stock: 150, reorder: 30 },
+    { name: 'Insulin (Mixtard)', form: 'Injection', strength: '100IU/ml 10ml', price: 1200, stock: 15, reorder: 5 },
+    { name: 'Insulin (Actrapid)', form: 'Injection', strength: '100IU/ml 10ml', price: 1100, stock: 12, reorder: 4 },
+
+    // ---- RESPIRATORY ----
+    { name: 'Salbutamol Inhaler', form: 'Inhaler', strength: '100mcg/dose', price: 500, stock: 40, reorder: 10 },
+    { name: 'Salbutamol Syrup', form: 'Syrup', strength: '2mg/5ml', price: 200, stock: 30, reorder: 10 },
+    { name: 'Salbutamol Nebules', form: 'Nebule', strength: '2.5mg/2.5ml', price: 60, stock: 50, reorder: 15 },
+    { name: 'Beclomethasone Inhaler', form: 'Inhaler', strength: '250mcg/dose', price: 900, stock: 15, reorder: 5 },
+    { name: 'Prednisolone', form: 'Tablet', strength: '5mg', price: 8, stock: 300, reorder: 60 },
+    { name: 'Prednisolone', form: 'Tablet', strength: '20mg', price: 15, stock: 150, reorder: 30 },
+    { name: 'Hydrocortisone Injection', form: 'Injection', strength: '100mg', price: 120, stock: 30, reorder: 8 },
+    { name: 'Dexamethasone Injection', form: 'Injection', strength: '4mg/ml', price: 60, stock: 40, reorder: 10 },
+    { name: 'Cetirizine', form: 'Tablet', strength: '10mg', price: 12, stock: 300, reorder: 60 },
+    { name: 'Loratadine', form: 'Tablet', strength: '10mg', price: 15, stock: 200, reorder: 40 },
+    { name: 'Chlorpheniramine', form: 'Tablet', strength: '4mg', price: 8, stock: 200, reorder: 40 },
+    { name: 'Promethazine Syrup', form: 'Syrup', strength: '5mg/5ml', price: 200, stock: 25, reorder: 8 },
+
+    // ---- GASTROINTESTINAL ----
+    { name: 'Omeprazole', form: 'Capsule', strength: '20mg', price: 20, stock: 250, reorder: 50 },
+    { name: 'Omeprazole', form: 'Capsule', strength: '40mg', price: 30, stock: 150, reorder: 30 },
+    { name: 'Ranitidine', form: 'Tablet', strength: '150mg', price: 15, stock: 200, reorder: 40 },
+    { name: 'ORS Sachet', form: 'Sachet', strength: 'Low osmolarity', price: 30, stock: 300, reorder: 60 },
+    { name: 'Zinc Sulphate', form: 'Tablet', strength: '20mg', price: 10, stock: 200, reorder: 40 },
+    { name: 'Metoclopramide', form: 'Tablet', strength: '10mg', price: 10, stock: 150, reorder: 30 },
+    { name: 'Buscopan', form: 'Tablet', strength: '10mg', price: 25, stock: 100, reorder: 20 },
+    { name: 'Buscopan Injection', form: 'Injection', strength: '20mg/ml', price: 80, stock: 30, reorder: 8 },
+
+    // ---- ANTIFUNGALS / ANTIVIRALS ----
+    { name: 'Fluconazole', form: 'Capsule', strength: '150mg', price: 60, stock: 100, reorder: 20 },
+    { name: 'Fluconazole', form: 'Capsule', strength: '200mg', price: 80, stock: 80, reorder: 15 },
+    { name: 'Clotrimazole Pessaries', form: 'Pessary', strength: '500mg', price: 200, stock: 30, reorder: 8 },
+    { name: 'Clotrimazole Cream', form: 'Cream', strength: '1% 20g', price: 150, stock: 40, reorder: 10 },
+    { name: 'Ketoconazole Cream', form: 'Cream', strength: '2% 15g', price: 250, stock: 25, reorder: 8 },
+    { name: 'Griseofulvin', form: 'Tablet', strength: '250mg', price: 30, stock: 80, reorder: 20 },
+    { name: 'Acyclovir', form: 'Tablet', strength: '400mg', price: 50, stock: 60, reorder: 15 },
+    { name: 'Acyclovir Cream', form: 'Cream', strength: '5% 5g', price: 300, stock: 20, reorder: 5 },
+
+    // ---- VITAMINS / SUPPLEMENTS ----
+    { name: 'Ferrous Sulphate', form: 'Tablet', strength: '200mg', price: 8, stock: 400, reorder: 80 },
+    { name: 'Folic Acid', form: 'Tablet', strength: '5mg', price: 8, stock: 300, reorder: 60 },
+    { name: 'Vitamin C', form: 'Tablet', strength: '100mg', price: 5, stock: 400, reorder: 80 },
+    { name: 'Multivitamin', form: 'Tablet', strength: 'Adult', price: 15, stock: 200, reorder: 40 },
+    { name: 'Vitamin B Complex', form: 'Tablet', strength: 'Standard', price: 12, stock: 200, reorder: 40 },
+    { name: 'Calcium + Vitamin D', form: 'Tablet', strength: '500mg/400IU', price: 25, stock: 150, reorder: 30 },
+
+    // ---- INJECTABLES / EMERGENCY ----
+    { name: 'Adrenaline', form: 'Injection', strength: '1mg/ml', price: 100, stock: 20, reorder: 5 },
+    { name: 'Atropine', form: 'Injection', strength: '0.6mg/ml', price: 80, stock: 20, reorder: 5 },
+    { name: 'Diazepam', form: 'Injection', strength: '5mg/ml', price: 100, stock: 15, reorder: 4 },
+    { name: 'Normal Saline', form: 'Infusion', strength: '0.9% 500ml', price: 100, stock: 100, reorder: 30 },
+    { name: 'Ringer\'s Lactate', form: 'Infusion', strength: '500ml', price: 120, stock: 80, reorder: 20 },
+    { name: 'Dextrose 5%', form: 'Infusion', strength: '500ml', price: 100, stock: 80, reorder: 20 },
+    { name: 'Dextrose 50%', form: 'Injection', strength: '50ml', price: 150, stock: 20, reorder: 5 },
+    { name: 'Hydralazine', form: 'Injection', strength: '20mg/ml', price: 150, stock: 15, reorder: 4 },
+    { name: 'Magnesium Sulphate', form: 'Injection', strength: '50% 10ml', price: 100, stock: 25, reorder: 6 },
+
+    // ---- OPHTHALMIC / TOPICAL ----
+    { name: 'Chloramphenicol Eye Drops', form: 'Drops', strength: '0.5%', price: 100, stock: 40, reorder: 10 },
+    { name: 'Gentamicin Eye Drops', form: 'Drops', strength: '0.3%', price: 120, stock: 30, reorder: 8 },
+    { name: 'Tetracycline Eye Ointment', form: 'Ointment', strength: '1%', price: 80, stock: 40, reorder: 10 },
+    { name: 'Hydrocortisone Cream', form: 'Cream', strength: '1% 15g', price: 150, stock: 30, reorder: 8 },
+    { name: 'Gentian Violet', form: 'Solution', strength: '1%', price: 80, stock: 25, reorder: 6 },
+    { name: 'Povidone Iodine', form: 'Solution', strength: '10%', price: 120, stock: 30, reorder: 8 },
+    { name: 'Hydrogen Peroxide', form: 'Solution', strength: '6%', price: 80, stock: 25, reorder: 6 }
+  ];
+
+  // Check existing drugs
+  const snap = await db.collection('drugs').get();
+  const existing = new Set(snap.docs.map(d => {
+    const x = d.data();
+    return `${(x.name||'').toLowerCase().trim()}|${(x.strength||'').toLowerCase().trim()}`;
+  }));
+
+  let created = 0, skipped = 0;
+  const batch = db.batch();
+  let batchCount = 0;
+
+  for (const d of catalog) {
+    const key = `${d.name.toLowerCase().trim()}|${(d.strength||'').toLowerCase().trim()}`;
+    if (existing.has(key)) { skipped++; continue; }
+
+    const ref = db.collection('drugs').doc();
+    batch.set(ref, {
+      name: d.name,
+      form: d.form,
+      strength: d.strength,
+      price: d.price,
+      stock: d.stock,
+      reorder: d.reorder,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    batchCount++;
+    created++;
+
+    if (batchCount === 400) {
+      await batch.commit();
+      batchCount = 0;
+    }
+  }
+
+  if (batchCount > 0) await batch.commit();
+
+  await loadCache();
+  toast(`${created} drugs added, ${skipped} skipped`, 'success');
+  if (typeof manageDrugCatalog === 'function') manageDrugCatalog();
+}
 // ============================================================
 // LABORATORY MODULE
 // ============================================================
