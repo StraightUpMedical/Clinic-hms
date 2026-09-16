@@ -967,6 +967,41 @@ function printElement(selectorOrHtml) {
   doc.write(fullHtml);
   doc.close();
 }
+  // ============================================================
+// LAB RESULT FLAGGING
+// ============================================================
+function flagLabResult(test, resultValue) {
+  if (!resultValue || resultValue === '') return { flag: '', color: '' };
+  const val = String(resultValue).trim();
+
+  // 1) Numeric range check (if test has "range" like "4-11" or "4 - 11")
+  if (test.range) {
+    const m = String(test.range).match(/^\s*(-?\d+\.?\d*)\s*[-–to]+\s*(-?\d+\.?\d*)\s*$/i);
+    if (m) {
+      const min = parseFloat(m[1]);
+      const max = parseFloat(m[2]);
+      const num = parseFloat(val);
+      if (!isNaN(num)) {
+        if (num < min) return { flag: 'LOW', color: 'bg-red-100 text-red-700' };
+        if (num > max) return { flag: 'HIGH', color: 'bg-red-100 text-red-700' };
+        return { flag: 'Normal', color: 'bg-green-100 text-green-700' };
+      }
+    }
+  }
+
+  // 2) Text normal check (if test has normalText like "Negative")
+  if (test.normalText) {
+    const normalized = val.toLowerCase();
+    const expected = String(test.normalText).toLowerCase().trim();
+    if (normalized === expected || normalized.includes(expected)) {
+      return { flag: 'Normal', color: 'bg-green-100 text-green-700' };
+    }
+    return { flag: 'Abnormal', color: 'bg-red-100 text-red-700' };
+  }
+
+  // 3) No rule → no flag
+  return { flag: '', color: '' };
+}
 // ============================================================
 // LABORATORY MODULE
 // ============================================================
@@ -1108,10 +1143,18 @@ async function labResultModal(orderId) {
     <h3 class="text-xl font-bold mb-4">Enter Lab Results</h3>
     <p class="text-sm text-gray-600 mb-3">Patient: <b>${esc(p ? patientName(p) : '—')}</b></p>
     <div class="space-y-2 mb-3">
-      ${(o.tests||[]).map((t,i) => `<div class="border rounded p-2">
-        <label class="label">${esc(t.name)}</label>
-        <input class="input result-input" data-i="${i}" value="${esc(t.result||'')}" placeholder="Result / value">
-      </div>`).join('')}
+      ${(o.tests||[]).map((t,i) => {
+        const cat = (CACHE.labTests || []).find(x => x.id === t.id);
+        const hint = cat
+          ? [cat.unit ? `Unit: ${cat.unit}` : '', cat.range ? `Normal: ${cat.range}` : '', cat.normalText ? `Expected: ${cat.normalText}` : '']
+              .filter(Boolean).join(' · ')
+          : '';
+        return `<div class="border rounded p-2">
+          <label class="label">${esc(t.name)}</label>
+          ${hint ? `<div class="text-xs text-gray-500 mb-1">${esc(hint)}</div>` : ''}
+          <input class="input result-input" data-i="${i}" value="${esc(t.result||'')}" placeholder="Result / value">
+        </div>`;
+      }).join('')}
     </div>
     <div class="mb-3"><label class="label">Lab Notes</label><textarea id="lr_notes" class="input" rows="2">${esc(o.labNotes||'')}</textarea></div>
     <div class="flex justify-end gap-2">
@@ -1125,7 +1168,13 @@ async function saveLabResults(orderId) {
   const doc = await db.collection('labOrders').doc(orderId).get();
   const o = doc.data();
   const inputs = [...document.querySelectorAll('.result-input')];
-  const tests = o.tests.map((t,i) => ({ ...t, result: inputs[i].value.trim() }));
+  const tests = o.tests.map((t,i) => {
+    const result = inputs[i].value.trim();
+    // Look up the catalog test to get its range/normalText
+    const cat = (CACHE.labTests || []).find(x => x.id === t.id);
+    const flagInfo = cat ? flagLabResult(cat, result) : { flag: '', color: '' };
+    return { ...t, result, flag: flagInfo.flag, unit: cat?.unit || t.unit || '', range: cat?.range || t.range || '', normalText: cat?.normalText || t.normalText || '' };
+  });
   await db.collection('labOrders').doc(orderId).update({
     tests, labNotes: document.getElementById('lr_notes').value.trim(),
     status: 'ready',
@@ -1135,6 +1184,7 @@ async function saveLabResults(orderId) {
   toast('Results saved', 'success');
   closeModal(); renderView('lab');
 }
+
 
 async function labResultView(orderId) {
   const doc = await db.collection('labOrders').doc(orderId).get();
@@ -1148,10 +1198,10 @@ async function labResultView(orderId) {
     </div>
     <div id="printArea">
       <div class="text-center mb-4">
-  <img src="logo.png" alt="Logo" style="max-width:150px;max-height:70px;margin:0 auto .3rem auto;display:block">
-  <h2 class="text-2xl font-bold">StraightUpMedical</h2>
-  <p class="text-sm text-gray-500">Laboratory Report</p>
-</div>
+        <img src="logo.png" alt="Logo" style="max-width:150px;max-height:70px;margin:0 auto .3rem auto;display:block">
+        <h2 class="text-2xl font-bold">StraightUpMedical</h2>
+        <p class="text-sm text-gray-500">Laboratory Report</p>
+      </div>
       <table class="mb-3"><tbody>
         <tr><td><b>Patient:</b></td><td>${esc(p ? patientName(p) : '—')}</td>
             <td><b>Number:</b></td><td>${esc(p?.number||'')}</td></tr>
@@ -1159,14 +1209,27 @@ async function labResultView(orderId) {
             <td><b>Order:</b></td><td>${orderId.slice(0,8)}</td></tr>
       </tbody></table>
       <table>
-        <thead><tr><th>Test</th><th>Result</th></tr></thead>
-        <tbody>${(o.tests||[]).map(t => `<tr><td>${esc(t.name)}</td><td><b>${esc(t.result||'—')}</b></td></tr>`).join('')}</tbody>
+        <thead><tr><th>Test</th><th>Result</th><th>Unit</th><th>Reference</th><th>Flag</th></tr></thead>
+        <tbody>${(o.tests||[]).map(t => {
+          const ref = t.range || t.normalText || '—';
+          const flagBadge = t.flag
+            ? `<span class="badge ${t.flag === 'Normal' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}">${esc(t.flag)}</span>`
+            : '—';
+          return `<tr>
+            <td>${esc(t.name)}</td>
+            <td><b>${esc(t.result||'—')}</b></td>
+            <td>${esc(t.unit||'—')}</td>
+            <td>${esc(ref)}</td>
+            <td>${flagBadge}</td>
+          </tr>`;
+        }).join('')}</tbody>
       </table>
       ${o.labNotes ? `<p class="mt-3 text-sm"><b>Notes:</b> ${esc(o.labNotes)}</p>` : ''}
+      <p class="mt-4 text-xs text-gray-500">Reviewed by: ______________________   Date: ____________</p>
     </div>
-  `);
-}
-  async function manageLabCatalog() {
+  `, 'max-w-3xl');
+}  
+async function manageLabCatalog() {
   const snap = await db.collection('labTests').orderBy('name').get();
   const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
   openModal(`
@@ -1174,18 +1237,33 @@ async function labResultView(orderId) {
       <h3 class="text-xl font-bold">Lab Test Catalog</h3>
       <button onclick="closeModal()" class="btn btn-secondary">Close</button>
     </div>
-    <div class="flex gap-2 mb-3">
-      <input id="lc_name" class="input" placeholder="Test name (e.g. CBC)">
-      <input id="lc_category" class="input" placeholder="Category" style="max-width:160px">
-      <input id="lc_price" type="number" class="input" placeholder="KES" style="max-width:100px">
-      <button onclick="addLabTest()" class="btn btn-primary">Add</button>
+
+    <div class="bg-blue-50 border border-blue-200 p-2 rounded mb-3 text-xs">
+      <b>Range</b> → enter as <code>min-max</code> (e.g. <code>4-11</code>) for numeric tests. Leave blank for text.
+      <br><b>Normal text</b> → for tests with text results (e.g. "Negative", "Not detected"). Leave blank for numeric.
     </div>
+
+    <div class="grid grid-cols-12 gap-2 mb-3">
+      <input id="lc_name" class="input col-span-3" placeholder="Test name">
+      <input id="lc_category" class="input col-span-2" placeholder="Category">
+      <input id="lc_price" type="number" class="input col-span-1" placeholder="KES">
+      <input id="lc_unit" class="input col-span-2" placeholder="Unit">
+      <input id="lc_range" class="input col-span-2" placeholder="Range (4-11)">
+      <input id="lc_normal" class="input col-span-1" placeholder="Normal">
+      <button onclick="addLabTest()" class="btn btn-primary col-span-1">Add</button>
+    </div>
+
     <div class="max-h-96 overflow-y-auto">
-    <table><thead><tr><th>Name</th><th>Category</th><th>Price</th><th></th></tr></thead><tbody>
+    <table><thead><tr>
+      <th>Name</th><th>Category</th><th>Price</th><th>Unit</th><th>Range</th><th>Normal</th><th></th>
+    </tr></thead><tbody>
       ${items.map(t => `<tr id="lc_row_${t.id}">
-        <td><input class="input lc-edit-name" value="${esc(t.name)}" data-id="${t.id}" style="display:none"><span class="lc-view-name">${esc(t.name)}</span></td>
-        <td><input class="input lc-edit-cat" value="${esc(t.category||'')}" data-id="${t.id}" style="display:none"><span class="lc-view-cat">${esc(t.category||'')}</span></td>
-        <td><input type="number" class="input lc-edit-price" value="${t.price||0}" data-id="${t.id}" style="display:none"><span class="lc-view-price">${t.price||0}</span></td>
+        <td><input class="input lc-edit-name" value="${esc(t.name)}" style="display:none"><span class="lc-view-name">${esc(t.name)}</span></td>
+        <td><input class="input lc-edit-cat" value="${esc(t.category||'')}" style="display:none"><span class="lc-view-cat">${esc(t.category||'')}</span></td>
+        <td><input type="number" class="input lc-edit-price" value="${t.price||0}" style="display:none"><span class="lc-view-price">${t.price||0}</span></td>
+        <td><input class="input lc-edit-unit" value="${esc(t.unit||'')}" style="display:none"><span class="lc-view-unit">${esc(t.unit||'')}</span></td>
+        <td><input class="input lc-edit-range" value="${esc(t.range||'')}" style="display:none"><span class="lc-view-range">${esc(t.range||'')}</span></td>
+        <td><input class="input lc-edit-normal" value="${esc(t.normalText||'')}" style="display:none"><span class="lc-view-normal">${esc(t.normalText||'')}</span></td>
         <td class="whitespace-nowrap">
           <button class="lc-edit-btn text-blue-600 text-sm" onclick="editLabRow('${t.id}')">Edit</button>
           <button class="lc-save-btn text-green-600 text-sm hidden" onclick="saveLabRow('${t.id}')">Save</button>
@@ -1195,13 +1273,13 @@ async function labResultView(orderId) {
       </tr>`).join('')}
     </tbody></table>
     </div>
-  `, 'max-w-3xl');
+  `, 'max-w-5xl');
 }
 
 function editLabRow(id) {
   const row = document.getElementById('lc_row_' + id);
-  row.querySelectorAll('.lc-edit-name, .lc-edit-cat, .lc-edit-price').forEach(i => i.style.display = '');
-  row.querySelectorAll('.lc-view-name, .lc-view-cat, .lc-view-price').forEach(s => s.style.display = 'none');
+  row.querySelectorAll('input').forEach(i => i.style.display = '');
+  row.querySelectorAll('span[class^="lc-view-"]').forEach(s => s.style.display = 'none');
   row.querySelector('.lc-edit-btn').classList.add('hidden');
   row.querySelector('.lc-del-btn').classList.add('hidden');
   row.querySelector('.lc-save-btn').classList.remove('hidden');
@@ -1210,8 +1288,8 @@ function editLabRow(id) {
 
 function cancelLabRow(id) {
   const row = document.getElementById('lc_row_' + id);
-  row.querySelectorAll('.lc-edit-name, .lc-edit-cat, .lc-edit-price').forEach(i => i.style.display = 'none');
-  row.querySelectorAll('.lc-view-name, .lc-view-cat, .lc-view-price').forEach(s => s.style.display = '');
+  row.querySelectorAll('input').forEach(i => i.style.display = 'none');
+  row.querySelectorAll('span[class^="lc-view-"]').forEach(s => s.style.display = '');
   row.querySelector('.lc-edit-btn').classList.remove('hidden');
   row.querySelector('.lc-del-btn').classList.remove('hidden');
   row.querySelector('.lc-save-btn').classList.add('hidden');
@@ -1222,32 +1300,46 @@ async function saveLabRow(id) {
   const row = document.getElementById('lc_row_' + id);
   const name = row.querySelector('.lc-edit-name').value.trim();
   if (!name) return toast('Name required', 'error');
-  const category = row.querySelector('.lc-edit-cat').value.trim();
-  const price = parseFloat(row.querySelector('.lc-edit-price').value) || 0;
-  await db.collection('labTests').doc(id).update({ name, category, price });
+  const data = {
+    name,
+    category: row.querySelector('.lc-edit-cat').value.trim(),
+    price: parseFloat(row.querySelector('.lc-edit-price').value) || 0,
+    unit: row.querySelector('.lc-edit-unit').value.trim(),
+    range: row.querySelector('.lc-edit-range').value.trim(),
+    normalText: row.querySelector('.lc-edit-normal').value.trim()
+  };
+  await db.collection('labTests').doc(id).update(data);
   toast('Updated', 'success');
-  row.querySelector('.lc-view-name').textContent = name;
-  row.querySelector('.lc-view-cat').textContent = category;
-  row.querySelector('.lc-view-price').textContent = price;
+  row.querySelector('.lc-view-name').textContent = data.name;
+  row.querySelector('.lc-view-cat').textContent = data.category;
+  row.querySelector('.lc-view-price').textContent = data.price;
+  row.querySelector('.lc-view-unit').textContent = data.unit;
+  row.querySelector('.lc-view-range').textContent = data.range;
+  row.querySelector('.lc-view-normal').textContent = data.normalText;
   cancelLabRow(id);
 }
+
 async function addLabTest() {
   const name = document.getElementById('lc_name').value.trim();
-  if (!name) return;
+  if (!name) return toast('Name required', 'error');
   await db.collection('labTests').add({
     name,
     category: document.getElementById('lc_category').value.trim(),
     price: parseFloat(document.getElementById('lc_price').value)||0,
+    unit: document.getElementById('lc_unit').value.trim(),
+    range: document.getElementById('lc_range').value.trim(),
+    normalText: document.getElementById('lc_normal').value.trim(),
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
   });
-  toast('Test added'); manageLabCatalog();
+  toast('Test added');
+  manageLabCatalog();
 }
+
 async function delLabTest(id) {
   if (!confirm('Delete this test?')) return;
   await db.collection('labTests').doc(id).delete();
   manageLabCatalog();
 }
-
 // ============================================================
 // RADIOLOGY MODULE
 // ============================================================
