@@ -32,7 +32,7 @@
   @media print {
   body { background: #fff !important; }
   body > *:not(#printHelper) { display: none !important; }
-  #printHelper { display: block !important; position: absolute; left: 0; top: 0; width: 100%; padding: 0; }
+  #printHelper { display: block !important; position: absolute; left: 0; top: 0; width: 100%; padding: 2rem; background: #fff !important; color: #000 !important; }
   .no-print { display: none !important; }
 }
 </style>
@@ -875,9 +875,8 @@ async function saveConsultation() {
   closeModal();
   renderView('consultation');
 }
-// ---------- UNIVERSAL PRINT ----------
+// ---------- UNIVERSAL PRINT (iframe method, fixed timing) ----------
 function printElement(selectorOrHtml) {
-  const helper = document.getElementById('printHelper');
   let html = '';
   if (typeof selectorOrHtml === 'string' && selectorOrHtml.trim().startsWith('<')) {
     html = selectorOrHtml;
@@ -890,47 +889,82 @@ function printElement(selectorOrHtml) {
   }
   if (!html) { toast('Nothing to print', 'error'); return; }
 
-  // Fill the helper
-  helper.innerHTML = html;
-  helper.style.display = 'block';
+  const fullHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="UTF-8">
+      <title>Print</title>
+      <style>
+        * { box-sizing: border-box; }
+        body { font-family: system-ui, -apple-system, sans-serif; padding: 2rem; color: #000; background: #fff; margin: 0; }
+        h1, h2, h3 { margin: 0 0 .5rem 0; }
+        table { width: 100%; border-collapse: collapse; margin: .5rem 0; }
+        th, td { padding: 6px; text-align: left; border-bottom: 1px solid #ccc; font-size: 13px; }
+        th { background: #f0f0f0; font-weight: 600; }
+        img { max-width: 100%; }
+        .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; }
+        .whitespace-pre-wrap { white-space: pre-wrap; }
+        .text-center { text-align: center; }
+        .font-bold { font-weight: 700; }
+        .text-xs { font-size: 11px; }
+        .text-sm { font-size: 12px; }
+        .text-gray-500 { color: #666; }
+        .text-red-600 { color: #dc2626; }
+        .text-red-700 { color: #b91c1c; }
+        .bg-blue-100 { background: #dbeafe; }
+        .text-blue-700 { color: #1d4ed8; }
+        .bg-yellow-100 { background: #fef3c7; }
+        .text-yellow-700 { color: #a16207; }
+        .bg-green-100 { background: #dcfce7; }
+        .text-green-700 { color: #15803d; }
+        .bg-gray-100 { background: #f3f4f6; }
+        .bg-gray-200 { background: #e5e7eb; }
+      </style>
+    </head>
+    <body>${html}</body>
+    </html>
+  `;
 
-  // Wait for any images in the helper to finish loading, then print
-  const imgs = helper.querySelectorAll('img');
-  let loaded = 0;
-  const total = imgs.length;
+  // Remove any existing print iframe
+  const oldFrame = document.getElementById('printIframe');
+  if (oldFrame) oldFrame.remove();
 
-  const triggerPrint = () => {
-    // Small delay to let the browser paint
-    setTimeout(() => {
-      window.print();
-      // Restore helper after print dialog closes
+  // Create iframe
+  const iframe = document.createElement('iframe');
+  iframe.id = 'printIframe';
+  iframe.style.position = 'fixed';
+  iframe.style.right = '0';
+  iframe.style.bottom = '0';
+  iframe.style.width = '0';
+  iframe.style.height = '0';
+  iframe.style.border = '0';
+  iframe.style.visibility = 'hidden';
+  document.body.appendChild(iframe);
+
+  // CRITICAL: attach onload BEFORE writing, so the event is caught
+  iframe.onload = () => {
+    try {
+      // Small delay so the browser paints the content
       setTimeout(() => {
-        helper.style.display = 'none';
-        helper.innerHTML = '';
-      }, 500);
-    }, 150);
+        iframe.contentWindow.focus();
+        iframe.contentWindow.print();
+        // Remove the iframe after the print dialog closes
+        setTimeout(() => {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+        }, 1500);
+      }, 100);
+    } catch (e) {
+      console.error('Print failed:', e);
+      toast('Print failed: ' + e.message, 'error');
+    }
   };
 
-  if (total === 0) {
-    triggerPrint();
-    return;
-  }
-
-  imgs.forEach(img => {
-    if (img.complete) {
-      loaded++;
-      if (loaded === total) triggerPrint();
-    } else {
-      img.onload = () => {
-        loaded++;
-        if (loaded === total) triggerPrint();
-      };
-      img.onerror = () => {
-        loaded++;
-        if (loaded === total) triggerPrint();
-      };
-    }
-  });
+  // Write the document AFTER onload is attached
+  const doc = iframe.contentWindow.document;
+  doc.open();
+  doc.write(fullHtml);
+  doc.close();
 }
 // ============================================================
 // LABORATORY MODULE
