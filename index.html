@@ -3510,7 +3510,34 @@ async function orthoViewCase(id) {
 // ============================================================
 // PAYMENTS MODULE
 // ============================================================
-async function viewPayments(c) {
+// ============================================================
+// DELETE PAYMENT (admin only, blocked on locked days)
+// ============================================================
+async function deletePayment(paymentId) {
+  if (CURRENT_USER.role !== 'admin') return toast('Only admins can delete payments', 'error');
+
+  const doc = await db.collection('payments').doc(paymentId).get();
+  if (!doc.exists) return toast('Payment not found', 'error');
+  const p = doc.data();
+
+  try {
+    await assertDayNotLocked(p.date);
+  } catch (e) {
+    return toast(e.message, 'error');
+  }
+
+  const amount = (p.amount||0).toLocaleString();
+  const mode = p.mode || '';
+  const pt = CACHE.patients.find(x => x.id === p.patientId);
+  const name = pt ? patientName(pt) : (p.patientName || '—');
+
+  if (!confirm(`Delete this payment?\n\nPatient: ${name}\nAmount: KES ${amount}\nMode: ${mode}\n\nThis cannot be undone.`)) return;
+
+  await db.collection('payments').doc(paymentId).delete();
+  toast('Payment deleted', 'success');
+  renderView('payments');
+}
+  async function viewPayments(c) {
   const today = todayStr();
   const [todaySnap, recentSnap] = await Promise.all([
     db.collection('payments').where('date','==',today).get(),
@@ -3550,7 +3577,10 @@ async function viewPayments(c) {
             <td>${esc(p.mode)}</td>
             <td>${esc(p.mpesaCode||p.shaRef||p.receipt||'')}</td>
             <td><b>KES ${(p.amount||0).toLocaleString()}</b></td>
-            <td><button onclick="printReceipt('${p.id}')" class="text-blue-600 text-sm">Receipt</button></td>
+            <td class="whitespace-nowrap">
+  <button onclick="printReceipt('${p.id}')" class="text-blue-600 text-sm">Receipt</button>
+  ${CURRENT_USER.role === 'admin' ? `<button onclick="deletePayment('${p.id}')" class="text-red-600 text-sm ml-2">Delete</button>` : ''}
+</td>
           </tr>`;
         }).join('')}
       </tbody></table>` : '<p class="text-gray-400">No payments today.</p>'}
@@ -3566,7 +3596,10 @@ async function viewPayments(c) {
             <td>${esc(pt ? patientName(pt) : '—')}</td>
             <td>${esc(p.mode)}</td>
             <td>KES ${(p.amount||0).toLocaleString()}</td>
-            <td><button onclick="printReceipt('${p.id}')" class="text-blue-600 text-sm">Receipt</button></td>
+            <td class="whitespace-nowrap">
+  <button onclick="printReceipt('${p.id}')" class="text-blue-600 text-sm">Receipt</button>
+  ${CURRENT_USER.role === 'admin' ? `<button onclick="deletePayment('${p.id}')" class="text-red-600 text-sm ml-2">Delete</button>` : ''}
+</td>
           </tr>`;
         }).join('')}
       </tbody></table>
@@ -4278,7 +4311,15 @@ async function isDayLocked(dateStr) {
   const doc = await db.collection('dayLocks').doc(dateStr).get();
   return doc.exists && doc.data().locked === true;
 }
-
+// Check if the date of a record is locked (throws if locked)
+async function assertDayNotLocked(dateStr) {
+  if (!dateStr) return true;
+  const doc = await db.collection('dayLocks').doc(dateStr).get();
+  if (doc.exists && doc.data().locked === true) {
+    throw new Error(`Day ${dateStr} is locked. Ask an admin to unlock before deleting.`);
+  }
+  return true;
+}
 async function lockDay(dateStr) {
   if (!confirm(`Lock payments for ${dateStr}?\n\nNo new payments can be recorded for this date until an admin unlocks it.`)) return;
   await db.collection('dayLocks').doc(dateStr).set({
