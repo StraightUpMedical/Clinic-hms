@@ -189,18 +189,20 @@ function setActiveTab(key) {
 // ---------- CACHE ----------
 async function loadCache() {
   try {
-    const [pSnap, dSnap, lSnap, rSnap, tSnap] = await Promise.all([
-      db.collection('patients').orderBy('createdAt', 'desc').limit(500).get(),
-      db.collection('drugs').orderBy('name').get(),
-      db.collection('labTests').orderBy('name').get(),
-      db.collection('radiologyTests').orderBy('name').get(),
-      db.collection('rxTemplates').orderBy('name').get()
-    ]);
+   const [pSnap, dSnap, lSnap, rSnap, tSnap, iSnap] = await Promise.all([
+  db.collection('patients').orderBy('createdAt', 'desc').limit(500).get(),
+  db.collection('drugs').orderBy('name').get(),
+  db.collection('labTests').orderBy('name').get(),
+  db.collection('radiologyTests').orderBy('name').get(),
+  db.collection('rxTemplates').orderBy('name').get(),
+  db.collection('drugInteractions').get()
+]); 
     CACHE.patients = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     CACHE.drugs = dSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     CACHE.labTests = lSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     CACHE.radiologyTests = rSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     CACHE.rxTemplates = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    CACHE.drugInteractions = iSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) { console.error('Cache load error:', e); }
 }
 async function refreshPatients() {
@@ -2654,6 +2656,147 @@ async function seedCommonTemplates() {
   toast(`${created} templates created, ${skipped} skipped`, 'success');
   manageRxTemplates();
 }
+  // ============================================================
+// DRUG INTERACTION DATABASE
+// ============================================================
+async function seedDrugInteractions() {
+  if (!confirm('Load ~30 common drug interactions? Existing interactions will not be overwritten.')) return;
+
+  const list = [
+    // === SEVERE ===
+    { a: 'warfarin', b: 'aspirin', severity: 'severe', effect: 'Increased bleeding risk (additive antiplatelet + anticoagulant effect).' },
+    { a: 'warfarin', b: 'ibuprofen', severity: 'severe', effect: 'Severe GI bleeding risk. Avoid NSAIDs with warfarin.' },
+    { a: 'warfarin', b: 'diclofenac', severity: 'severe', effect: 'Severe GI bleeding risk. Use paracetamol instead.' },
+    { a: 'warfarin', b: 'clarithromycin', severity: 'severe', effect: 'Marked INR rise — risk of hemorrhage. Use azithromycin instead.' },
+    { a: 'simvastatin', b: 'clarithromycin', severity: 'severe', effect: 'Rhabdomyolysis risk. Hold statin during macrolide course.' },
+    { a: 'simvastatin', b: 'itraconazole', severity: 'severe', effect: 'Rhabdomyolysis risk. Avoid combination.' },
+    { a: 'metronidazole', b: 'alcohol', severity: 'severe', effect: 'Disulfiram-like reaction. Avoid alcohol during and 48h after.' },
+    { a: 'ciprofloxacin', b: 'tizanidine', severity: 'severe', effect: 'Hypotension, sedation. Contraindicated.' },
+    { a: 'tramadol', b: 'fluoxetine', severity: 'severe', effect: 'Serotonin syndrome risk.' },
+    { a: 'tramadol', b: 'sertraline', severity: 'severe', effect: 'Serotonin syndrome risk.' },
+    { a: 'methotrexate', b: 'ibuprofen', severity: 'severe', effect: 'Reduced MTX clearance — bone marrow suppression.' },
+    { a: 'clopidogrel', b: 'omeprazole', severity: 'severe', effect: 'Reduced clopidogrel activation. Use pantoprazole.' },
+
+    // === MODERATE ===
+    { a: 'warfarin', b: 'ciprofloxacin', severity: 'moderate', effect: 'INR may rise. Monitor INR closely.' },
+    { a: 'warfarin', b: 'metronidazole', severity: 'moderate', effect: 'INR rise. Monitor.' },
+    { a: 'metformin', b: 'furosemide', severity: 'moderate', effect: 'Lactic acidosis risk — monitor renal function.' },
+    { a: 'metformin', b: 'prednisolone', severity: 'moderate', effect: 'Loss of glycemic control. May need dose adjustment.' },
+    { a: 'amlodipine', b: 'simvastatin', severity: 'moderate', effect: 'Increased statin exposure. Limit simvastatin to 20mg.' },
+    { a: 'captopril', b: 'spironolactone', severity: 'moderate', effect: 'Hyperkalemia risk. Monitor K+.' },
+    { a: 'losartan', b: 'spironolactone', severity: 'moderate', effect: 'Hyperkalemia risk. Monitor K+.' },
+    { a: 'atenolol', b: 'verapamil', severity: 'moderate', effect: 'Bradycardia, heart block. Monitor HR.' },
+    { a: 'digoxin', b: 'furosemide', severity: 'moderate', effect: 'Hypokalemia increases digoxin toxicity. Monitor K+.' },
+    { a: 'amoxicillin', b: 'methotrexate', severity: 'moderate', effect: 'Increased MTX toxicity. Monitor FBC.' },
+    { a: 'ciprofloxacin', b: 'antacid', severity: 'moderate', effect: 'Reduced ciprofloxacin absorption. Separate by 2h.' },
+    { a: 'tetracycline', b: 'antacid', severity: 'moderate', effect: 'Reduced absorption. Separate doses by 2h.' },
+    { a: 'doxycycline', b: 'antacid', severity: 'moderate', effect: 'Reduced absorption. Separate doses.' },
+    { a: 'ketoconazole', b: 'omeprazole', severity: 'moderate', effect: 'Reduced antifungal absorption. Take with acidic drink.' },
+    { a: 'prednisolone', b: 'ibuprofen', severity: 'moderate', effect: 'Increased GI ulceration risk. Consider PPI cover.' },
+    { a: 'prednisolone', b: 'diclofenac', severity: 'moderate', effect: 'Increased GI ulceration risk. Consider PPI cover.' },
+    { a: 'carbamazepine', b: 'oral contraceptive', severity: 'moderate', effect: 'Reduced contraceptive efficacy. Use backup method.' },
+    { a: 'phenytoin', b: 'oral contraceptive', severity: 'moderate', effect: 'Reduced contraceptive efficacy.' },
+    { a: 'rifampicin', b: 'oral contraceptive', severity: 'moderate', effect: 'Reduced contraceptive efficacy.' },
+    { a: 'ciprofloxacin', b: 'theophylline', severity: 'moderate', effect: 'Theophylline toxicity risk. Monitor levels.' },
+    { a: 'metoclopramide', b: 'levodopa', severity: 'moderate', effect: 'Reduced levodopa effect. Avoid if possible.' },
+
+    // === MILD ===
+    { a: 'paracetamol', b: 'warfarin', severity: 'mild', effect: 'Regular high-dose paracetamol may raise INR. Occasional use is fine.' },
+    { a: 'aspirin', b: 'ibuprofen', severity: 'mild', effect: 'Ibuprofen may block aspirin cardioprotective effect. Separate doses.' },
+    { a: 'cetirizine', b: 'alcohol', severity: 'mild', effect: 'Increased drowsiness. Advise caution.' },
+    { a: 'chlorpheniramine', b: 'alcohol', severity: 'mild', effect: 'Increased drowsiness.' },
+    { a: 'omeprazole', b: 'iron', severity: 'mild', effect: 'Reduced iron absorption. Separate doses by 2h.' },
+    { a: 'calcium', b: 'iron', severity: 'mild', effect: 'Reduced iron absorption. Separate doses.' },
+    { a: 'thyroxine', b: 'iron', severity: 'mild', effect: 'Reduced thyroxine absorption. Separate by 4h.' },
+    { a: 'thyroxine', b: 'calcium', severity: 'mild', effect: 'Reduced thyroxine absorption. Separate by 4h.' }
+  ];
+
+  const snap = await db.collection('drugInteractions').get();
+  const existing = new Set(snap.docs.map(d => {
+    const x = d.data();
+    return `${(x.a||'').toLowerCase()}|${(x.b||'').toLowerCase()}`;
+  }));
+
+  let created = 0, skipped = 0;
+  const batch = db.batch();
+  for (const it of list) {
+    const key1 = `${it.a.toLowerCase()}|${it.b.toLowerCase()}`;
+    const key2 = `${it.b.toLowerCase()}|${it.a.toLowerCase()}`;
+    if (existing.has(key1) || existing.has(key2)) { skipped++; continue; }
+    batch.set(db.collection('drugInteractions').doc(), {
+      a: it.a.toLowerCase(),
+      b: it.b.toLowerCase(),
+      severity: it.severity,
+      effect: it.effect,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    created++;
+  }
+  await batch.commit();
+  await loadCache();
+  toast(`${created} interactions loaded, ${skipped} skipped`, 'success');
+}
+// ============================================================
+// INTERACTION CHECK
+// ============================================================
+function checkInteractions(drugNames) {
+  // drugNames: array of strings like ['Warfarin 5mg', 'Aspirin 75mg']
+  if (!CACHE.drugInteractions || !drugNames.length) return [];
+
+  // Normalize: lowercase, strip strength/dosage, extract first word
+  const normalize = (n) => n.toLowerCase().trim().split(/[ ,()]+/)[0];
+  const names = drugNames.map(normalize);
+
+  const found = [];
+  for (let i = 0; i < names.length; i++) {
+    for (let j = i + 1; j < names.length; j++) {
+      const a = names[i];
+      const b = names[j];
+      for (const it of CACHE.drugInteractions) {
+        const ia = it.a, ib = it.b;
+        if ((ia === a && ib === b) || (ia === b && ib === a)) {
+          found.push({
+            drugA: drugNames[i],
+            drugB: drugNames[j],
+            severity: it.severity,
+            effect: it.effect
+          });
+          break;
+        }
+      }
+    }
+  }
+  return found;
+}
+
+function renderInteractionWarnings(warnings, containerId) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (!warnings.length) { el.innerHTML = ''; return; }
+
+  const styleFor = (sev) => {
+    if (sev === 'severe') return { bg:'bg-red-50 border-red-300', text:'text-red-800', icon:'⛔', label:'SEVERE' };
+    if (sev === 'moderate') return { bg:'bg-orange-50 border-orange-300', text:'text-orange-800', icon:'⚠️', label:'MODERATE' };
+    return { bg:'bg-yellow-50 border-yellow-300', text:'text-yellow-800', icon:'ℹ️', label:'MILD' };
+  };
+
+  el.innerHTML = `
+    <div class="border rounded p-3 mb-3 ${warnings.some(w=>w.severity==='severe') ? 'bg-red-50 border-red-300' : 'bg-orange-50 border-orange-300'}">
+      <div class="font-bold mb-2 ${warnings.some(w=>w.severity==='severe') ? 'text-red-800' : 'text-orange-800'}">
+        ⚠️ Drug interaction warnings (${warnings.length})
+      </div>
+      ${warnings.map(w => {
+        const s = styleFor(w.severity);
+        return `<div class="mb-2 pl-3 border-l-4 border-${w.severity==='severe'?'red':w.severity==='moderate'?'orange':'yellow'}-500">
+          <div class="text-sm ${s.text}">
+            <b>${s.icon} ${s.label}</b>: <b>${esc(w.drugA)}</b> + <b>${esc(w.drugB)}</b>
+          </div>
+          <div class="text-xs ${s.text} ml-5">${esc(w.effect)}</div>
+        </div>`;
+      }).join('')}
+    </div>
+  `;
+}  
 // ============================================================
 // PHARMACY MODULE
 // ============================================================
@@ -2754,6 +2897,8 @@ function pharmPrescribeModal(pid, templateId) {
     </div>
 
     <div id="pp_items" class="space-y-2 mb-3"></div>
+        <div id="pp_warnings"></div>
+    <div id="pp_warnings"></div>
     <div class="flex gap-2 mb-3">
       <button onclick="addRxItem()" class="btn btn-secondary text-sm">+ Add Drug</button>
       <button onclick="saveAsTemplateModal()" class="btn btn-secondary text-sm">💾 Save as Template</button>
@@ -2801,19 +2946,39 @@ function addRxItem(preset) {
   wrap.appendChild(el(`<div class="grid grid-cols-12 gap-2 items-end" id="${id}">
     <div class="col-span-6">
       <label class="label">Drug</label>
-      ${drugs.length ? `<select class="input rx-drug">
+      ${drugs.length ? `<select class="input rx-drug" onchange="refreshInteractionWarnings()">
         <option value="">— Select drug —</option>
         ${drugs.map(d => `<option value="${d.id}" data-name="${esc(d.name)}" data-price="${d.price||0}" data-stock="${d.stock||0}" ${preDrugId===d.id?'selected':''}>${esc(d.name)} ${d.strength?'· '+esc(d.strength):''}</option>`).join('')}
-      </select>` : '<input class="input rx-drug-name" placeholder="Type drug name">'}
+      </select>` : '<input class="input rx-drug-name" placeholder="Type drug name" oninput="refreshInteractionWarnings()">'}
     </div>
     <div class="col-span-2"><label class="label">Qty</label><input type="number" class="input rx-qty" value="${preQty}" min="1"></div>
     <div class="col-span-3"><label class="label">Dosage / Frequency</label><input class="input rx-sig" placeholder="e.g. 1 tab TID x 5d" value="${esc(preSig)}"></div>
-    <div class="col-span-1"><button onclick="document.getElementById('${id}').remove()" class="btn btn-danger w-full">×</button></div>
+    <div class="col-span-1"><button onclick="document.getElementById('${id}').remove();refreshInteractionWarnings()" class="btn btn-danger w-full">×</button></div>
   </div>`));
+  refreshInteractionWarnings();
+}
+
+function currentRxDrugNames() {
+  return [...document.querySelectorAll('#pp_items > div')].map(r => {
+    const sel = r.querySelector('.rx-drug');
+    const nameInp = r.querySelector('.rx-drug-name');
+    if (sel) {
+      const opt = sel.options[sel.selectedIndex];
+      return opt && opt.value ? opt.dataset.name : null;
+    }
+    return (nameInp?.value || '').trim() || null;
+  }).filter(Boolean);
+}
+
+function refreshInteractionWarnings() {
+  const names = currentRxDrugNames();
+  const warnings = checkInteractions(names);
+  renderInteractionWarnings(warnings, 'pp_warnings');
 }
 function rxDrugChange(sel) {
   // Reserved for future use
 }
+
 
 async function savePrescription() {
   const inp = document.getElementById('pp_patient');
@@ -2840,11 +3005,26 @@ async function savePrescription() {
   }).filter(Boolean);
   if (!items.length) return toast('Add at least one drug', 'error');
 
+  // Interaction check on save
+  const warnings = checkInteractions(items.map(i => i.name));
+  if (warnings.length) {
+    const hasSevere = warnings.some(w => w.severity === 'severe');
+    const summary = warnings.map(w => `• [${w.severity.toUpperCase()}] ${w.drugA} + ${w.drugB}: ${w.effect}`).join('\n');
+    const ok = confirm(
+      (hasSevere ? '⛔ SEVERE drug interaction detected!\n\n' : '⚠️ Drug interaction(s) detected:\n\n')
+      + summary
+      + '\n\nContinue and save anyway?'
+    );
+    if (!ok) return;
+  }
+
   const visit = await getOrCreateTodayVisit(patientId);
   await db.collection('prescriptions').add({
     patientId, visitId: visit.id, date: todayStr(),
     items, notes: document.getElementById('pp_notes').value.trim(),
     status: 'pending',
+    interactions: warnings,
+    hasSevereInteraction: warnings.some(w => w.severity === 'severe'),
     prescriberId: CURRENT_USER.uid,
     prescriberName: CURRENT_USER.name || CURRENT_USER.email,
     createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -2852,14 +3032,27 @@ async function savePrescription() {
   toast('Prescription saved', 'success');
   closeModal(); renderView('pharmacy');
 }
-
 async function dispenseModal(rxId) {
   const doc = await db.collection('prescriptions').doc(rxId).get();
   const r = doc.data();
   const p = CACHE.patients.find(x => x.id === r.patientId);
+  const warnings = r.interactions || checkInteractions((r.items||[]).map(i => i.name));
+
   openModal(`
     <h3 class="text-xl font-bold mb-3">Dispense Prescription</h3>
     <p class="text-sm text-gray-600 mb-3">Patient: <b>${esc(p ? patientName(p) : '—')}</b></p>
+
+    ${warnings.length ? `
+      <div class="mb-3 border rounded p-3 ${warnings.some(w=>w.severity==='severe') ? 'bg-red-50 border-red-300' : 'bg-orange-50 border-orange-300'}">
+        <div class="font-bold mb-2 ${warnings.some(w=>w.severity==='severe') ? 'text-red-800' : 'text-orange-800'}">
+          ⚠️ Interactions (${warnings.length})
+        </div>
+        ${warnings.map(w => `<div class="text-sm ${w.severity==='severe'?'text-red-700':w.severity==='moderate'?'text-orange-700':'text-yellow-700'}">
+          <b>${w.severity.toUpperCase()}:</b> ${esc(w.drugA)} + ${esc(w.drugB)} — ${esc(w.effect)}
+        </div>`).join('')}
+      </div>
+    ` : ''}
+
     <table class="mb-3"><thead><tr><th>Drug</th><th>Qty</th><th>Sig</th><th>In stock</th></tr></thead><tbody>
       ${(r.items||[]).map(i => {
         const d = CACHE.drugs.find(x => x.id === i.drugId);
@@ -2867,13 +3060,13 @@ async function dispenseModal(rxId) {
           <td>${d ? (d.stock||0) : '—'}</td></tr>`;
       }).join('')}
     </tbody></table>
+
     <div class="flex justify-end gap-2">
       <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
       <button onclick="confirmDispense('${rxId}')" class="btn btn-primary">Confirm Dispense</button>
     </div>
-  `);
+  `, warnings.length ? 'max-w-3xl' : 'max-w-2xl');
 }
-
 async function confirmDispense(rxId) {
   const doc = await db.collection('prescriptions').doc(rxId).get();
   const r = doc.data();
