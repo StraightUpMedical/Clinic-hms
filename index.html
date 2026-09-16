@@ -189,16 +189,18 @@ function setActiveTab(key) {
 // ---------- CACHE ----------
 async function loadCache() {
   try {
-    const [pSnap, dSnap, lSnap, rSnap] = await Promise.all([
+    const [pSnap, dSnap, lSnap, rSnap, tSnap] = await Promise.all([
       db.collection('patients').orderBy('createdAt', 'desc').limit(500).get(),
       db.collection('drugs').orderBy('name').get(),
       db.collection('labTests').orderBy('name').get(),
       db.collection('radiologyTests').orderBy('name').get()
+      db.collection('rxTemplates').orderBy('name').get()
     ]);
     CACHE.patients = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     CACHE.drugs = dSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     CACHE.labTests = lSnap.docs.map(d => ({ id: d.id, ...d.data() }));
     CACHE.radiologyTests = rSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    CACHE.rxTemplates = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) { console.error('Cache load error:', e); }
 }
 
@@ -2150,27 +2152,293 @@ function printQueueBoard() {
     </div>
   `);
 }
+  // ============================================================
+// PRESCRIPTION TEMPLATES
+// ============================================================
+async function manageRxTemplates() {
+  const snap = await db.collection('rxTemplates').orderBy('name').get();
+  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Prescription Templates</h3>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+    <p class="text-xs text-gray-500 mb-3">Templates let doctors quickly fill in common prescriptions (e.g. "Malaria adult"). Save templates from the prescription form, or add them from common Kenyan clinic protocols.</p>
+
+    <div class="mb-3">
+      <button onclick="seedCommonTemplates()" class="btn btn-secondary text-sm">📥 Load 8 common templates</button>
+      <button onclick="newEmptyTemplateModal()" class="btn btn-secondary text-sm">+ New Blank Template</button>
+    </div>
+
+    ${items.length ? `<table><thead><tr>
+      <th>Name</th><th>Drugs</th><th>Notes</th><th></th>
+    </tr></thead><tbody>
+      ${items.map(t => `<tr>
+        <td><b>${esc(t.name)}</b></td>
+        <td class="text-xs text-gray-600">${esc((t.items||[]).map(i=>`${i.name} x${i.qty}`).join(', '))}</td>
+        <td class="text-xs text-gray-500">${esc((t.notes||'').slice(0,50))}</td>
+        <td class="whitespace-nowrap">
+          <button onclick="closeModal();pharmPrescribeModal(null,'${t.id}')" class="text-blue-600 text-sm">Use</button>
+          <button onclick="editTemplateModal('${t.id}')" class="text-blue-600 text-sm ml-2">Edit</button>
+          <button onclick="delRxTemplate('${t.id}')" class="text-red-600 text-sm ml-2">Delete</button>
+        </td>
+      </tr>`).join('')}
+    </tbody></table>` : '<p class="text-gray-400">No templates yet.</p>'}
+  `, 'max-w-3xl');
+}
+
+async function delRxTemplate(id) {
+  if (!confirm('Delete this template?')) return;
+  await db.collection('rxTemplates').doc(id).delete();
+  await loadCache();
+  toast('Deleted', 'success');
+  manageRxTemplates();
+}
+
+async function saveAsTemplateModal() {
+  // Read current form items
+  const rows = [...document.querySelectorAll('#pp_items > div')];
+  const items = rows.map(r => {
+    const sel = r.querySelector('.rx-drug');
+    const nameInp = r.querySelector('.rx-drug-name');
+    const qty = parseInt(r.querySelector('.rx-qty').value) || 0;
+    const sig = r.querySelector('.rx-sig').value.trim();
+    let name = '', drugId = null;
+    if (sel) {
+      const opt = sel.options[sel.selectedIndex];
+      if (!opt || !opt.value) return null;
+      name = opt.dataset.name;
+      drugId = opt.value;
+    } else {
+      name = (nameInp?.value || '').trim();
+      if (!name) return null;
+    }
+    return { drugId, name, qty, sig };
+  }).filter(Boolean);
+  if (!items.length) return toast('Add at least one drug first', 'error');
+
+  const notes = document.getElementById('pp_notes').value.trim();
+  const name = prompt('Template name (e.g. "Malaria adult", "URTI child"):');
+  if (!name) return;
+
+  await db.collection('rxTemplates').add({
+    name,
+    items,
+    notes,
+    createdBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await loadCache();
+  toast('Template saved: ' + name, 'success');
+}
+
+async function editTemplateModal(id) {
+  const doc = await db.collection('rxTemplates').doc(id).get();
+  if (!doc.exists) return toast('Not found', 'error');
+  const t = doc.data();
+  openModal(`
+    <h3 class="text-xl font-bold mb-3">Edit Template</h3>
+    <div class="mb-3">
+      <label class="label">Template name</label>
+      <input id="tmpl_name" class="input" value="${esc(t.name)}">
+    </div>
+    <div class="mb-3">
+      <label class="label">Notes</label>
+      <textarea id="tmpl_notes" class="input" rows="2">${esc(t.notes||'')}</textarea>
+    </div>
+    <div class="mb-2"><label class="label">Drugs</label></div>
+    <div id="tmpl_items" class="space-y-2 mb-3"></div>
+    <button onclick="addTmplItem()" class="btn btn-secondary text-sm mb-3">+ Add Drug</button>
+    <div class="flex justify-end gap-2">
+      <button onclick="manageRxTemplates()" class="btn btn-secondary">Back</button>
+      <button onclick="saveTemplateEdit('${id}')" class="btn btn-primary">Save</button>
+    </div>
+  `, 'max-w-2xl');
+  (t.items || []).forEach(it => addTmplItem(it));
+  if (!(t.items||[]).length) addTmplItem();
+}
+
+function addTmplItem(preset) {
+  const wrap = document.getElementById('tmpl_items');
+  const id = 'ti_' + Date.now() + Math.random().toString(36).slice(2,6);
+  const drugs = CACHE.drugs;
+  const preDrugId = preset?.drugId || '';
+  const preQty = preset?.qty || 1;
+  const preSig = preset?.sig || '';
+  wrap.appendChild(el(`<div class="grid grid-cols-12 gap-2 items-end" id="${id}">
+    <div class="col-span-6">
+      <select class="input tmpl-drug">
+        <option value="">— Select drug —</option>
+        ${drugs.map(d => `<option value="${d.id}" data-name="${esc(d.name)}" ${preDrugId===d.id?'selected':''}>${esc(d.name)} ${d.strength?'· '+esc(d.strength):''}</option>`).join('')}
+      </select>
+    </div>
+    <div class="col-span-2"><input type="number" class="input tmpl-qty" value="${preQty}" min="1" placeholder="Qty"></div>
+    <div class="col-span-3"><input class="input tmpl-sig" placeholder="Dosage" value="${esc(preSig)}"></div>
+    <div class="col-span-1"><button onclick="document.getElementById('${id}').remove()" class="btn btn-danger w-full">×</button></div>
+  </div>`));
+}
+
+async function saveTemplateEdit(id) {
+  const name = document.getElementById('tmpl_name').value.trim();
+  if (!name) return toast('Name required', 'error');
+  const rows = [...document.querySelectorAll('#tmpl_items > div')];
+  const items = rows.map(r => {
+    const sel = r.querySelector('.tmpl-drug');
+    const qty = parseInt(r.querySelector('.tmpl-qty').value) || 0;
+    const sig = r.querySelector('.tmpl-sig').value.trim();
+    const opt = sel.options[sel.selectedIndex];
+    if (!opt || !opt.value) return null;
+    return { drugId: opt.value, name: opt.dataset.name, qty, sig };
+  }).filter(Boolean);
+  if (!items.length) return toast('Add at least one drug', 'error');
+
+  await db.collection('rxTemplates').doc(id).update({
+    name,
+    notes: document.getElementById('tmpl_notes').value.trim(),
+    items,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await loadCache();
+  toast('Template updated', 'success');
+  manageRxTemplates();
+}
+
+async function newEmptyTemplateModal() {
+  const name = prompt('New template name:');
+  if (!name) return;
+  const ref = await db.collection('rxTemplates').add({
+    name,
+    items: [],
+    notes: '',
+    createdBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+  await loadCache();
+  editTemplateModal(ref.id);
+}
+
+async function seedCommonTemplates() {
+  if (!CACHE.drugs.length) return toast('Drug catalog is empty — add drugs first', 'error');
+  if (!confirm('Load 8 common Kenyan clinic templates? Existing templates with the same names will not be overwritten.')) return;
+
+  // Match drug names loosely
+  const findDrug = (fragment) => CACHE.drugs.find(d => d.name.toLowerCase().includes(fragment.toLowerCase()));
+
+  const templates = [
+    {
+      name: 'Malaria adult',
+      items: [
+        { match: 'artemether', qty: 24, sig: '4 tabs at 0h, 8h, 24h, 36h, 48h, 60h' },
+        { match: 'paracetamol', qty: 20, sig: '1 tab TID x 5d' }
+      ],
+      notes: 'Malaria confirmed. Encourage fluids. Return if fever persists >48h.'
+    },
+    {
+      name: 'Malaria child',
+      items: [
+        { match: 'artemether', qty: 6, sig: 'Weight-based: 1 tab at 0h, 8h, 24h, 36h, 48h, 60h (5-14kg)' },
+        { match: 'paracetamol', qty: 10, sig: '125mg/5ml — 5ml QID x 3d' }
+      ],
+      notes: 'Pediatric malaria. Dose by weight.'
+    },
+    {
+      name: 'URTI adult',
+      items: [
+        { match: 'paracetamol', qty: 20, sig: '1 tab TID x 5d' },
+        { match: 'cetirizine', qty: 10, sig: '1 tab nocte x 5d' }
+      ],
+      notes: 'Upper respiratory tract infection. Steam inhalation. Return if no improvement in 3d.'
+    },
+    {
+      name: 'URTI child',
+      items: [
+        { match: 'paracetamol', qty: 10, sig: '125mg/5ml — dose by weight' },
+        { match: 'cetirizine', qty: 5, sig: '2.5mg nocte x 5d' }
+      ],
+      notes: 'Pediatric URTI.'
+    },
+    {
+      name: 'UTI adult',
+      items: [
+        { match: 'ciprofloxacin', qty: 14, sig: '1 tab BD x 7d' },
+        { match: 'paracetamol', qty: 20, sig: '1 tab TID' }
+      ],
+      notes: 'Urinary tract infection. Increase water intake. Return if no improvement in 48h.'
+    },
+    {
+      name: 'Gastroenteritis',
+      items: [
+        { match: 'ors', qty: 4, sig: '1 sachet in 1L water — sip frequently' },
+        { match: 'metronidazole', qty: 15, sig: '1 tab TID x 5d' }
+      ],
+      notes: 'Rehydrate. Avoid dairy. Return if blood in stool or severe dehydration.'
+    },
+    {
+      name: 'Pneumonia adult',
+      items: [
+        { match: 'amoxicillin', qty: 21, sig: '1 cap TID x 7d' },
+        { match: 'paracetamol', qty: 20, sig: '1 tab TID PRN' }
+      ],
+      notes: 'Community-acquired pneumonia. Return if short of breath.'
+    },
+    {
+      name: 'Hypertension starter',
+      items: [
+        { match: 'amlodipine', qty: 30, sig: '1 tab OD' }
+      ],
+      notes: 'Start 5mg OD. Review BP in 2 weeks. Advise low-salt diet.'
+    }
+  ];
+
+  let created = 0, skipped = 0;
+  const existing = await db.collection('rxTemplates').get();
+  const existingNames = new Set(existing.docs.map(d => d.data().name));
+
+  for (const t of templates) {
+    if (existingNames.has(t.name)) { skipped++; continue; }
+    const items = t.items.map(i => {
+      const d = findDrug(i.match);
+      return d ? { drugId: d.id, name: d.name, qty: i.qty, sig: i.sig } : null;
+    }).filter(Boolean);
+    if (!items.length) { skipped++; continue; }
+    await db.collection('rxTemplates').add({
+      name: t.name,
+      items,
+      notes: t.notes,
+      createdBy: CURRENT_USER.uid,
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    created++;
+  }
+
+  await loadCache();
+  toast(`${created} templates created, ${skipped} skipped`, 'success');
+  manageRxTemplates();
+}
 // ============================================================
 // PHARMACY MODULE
 // ============================================================
 const PAYMENT_MODES = ['Cash', 'Mpesa', 'SHA', 'Insurance', 'Bank Transfer', 'Card'];
 
 async function viewPharmacy(c) {
-  const [drugsSnap, rxSnap] = await Promise.all([
+  const [drugsSnap, rxSnap, tmplSnap] = await Promise.all([
     db.collection('drugs').orderBy('name').get(),
-    db.collection('prescriptions').orderBy('createdAt','desc').limit(100).get()
+    db.collection('prescriptions').orderBy('createdAt','desc').limit(100).get(),
+    db.collection('rxTemplates').orderBy('name').get()
   ]);
   CACHE.drugs = drugsSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  CACHE.rxTemplates = tmplSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const rxs = rxSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   const pending = rxs.filter(r => r.status === 'pending');
   const dispensed = rxs.filter(r => r.status === 'dispensed');
   const lowStock = CACHE.drugs.filter(d => (d.stock||0) <= (d.reorder||0));
 
   c.innerHTML = `
-    <div class="flex justify-between items-center mb-4">
+    <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
       <h2 class="text-2xl font-bold">Pharmacy</h2>
       <div class="flex gap-2">
         <button onclick="pharmPrescribeModal()" class="btn btn-primary">+ New Prescription</button>
+        <button onclick="manageRxTemplates()" class="btn btn-secondary">📋 Templates</button>
         <button onclick="manageDrugCatalog()" class="btn btn-secondary">⚙ Drug Catalog</button>
       </div>
     </div>
@@ -2179,6 +2447,17 @@ async function viewPharmacy(c) {
       <b class="text-red-700">⚠ Low stock:</b>
       <span class="text-sm">${lowStock.map(d => `${esc(d.name)} (${d.stock||0})`).join(', ')}</span>
     </div>` : ''}
+
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold mb-2">Prescription Templates (${CACHE.rxTemplates.length})</h3>
+      ${CACHE.rxTemplates.length ? `<div class="flex flex-wrap gap-2">
+        ${CACHE.rxTemplates.map(t => `
+          <button onclick="pharmPrescribeModal(null, '${t.id}')" class="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 rounded text-sm">
+            📋 ${esc(t.name)}
+          </button>
+        `).join('')}
+      </div>` : '<p class="text-gray-400 text-sm">No templates yet. Create one from the prescription form or by clicking "📋 Templates".</p>'}
+    </div>
 
     <div class="card p-4 mb-4">
       <h3 class="font-semibold mb-2">Pending Prescriptions (${pending.length})</h3>
@@ -2212,10 +2491,23 @@ async function viewPharmacy(c) {
 
 function pharmSelectPatient(pid) { pharmPrescribeModal(pid); }
 
-function pharmPrescribeModal(pid) {
+function pharmPrescribeModal(pid, templateId) {
   const drugs = CACHE.drugs;
+  const tmpl = templateId ? (CACHE.rxTemplates || []).find(t => t.id === templateId) : null;
+
   openModal(`
-    <h3 class="text-xl font-bold mb-4">New Prescription</h3>
+    <h3 class="text-xl font-bold mb-4">New Prescription ${tmpl ? '— '+esc(tmpl.name) : ''}</h3>
+
+    ${(CACHE.rxTemplates || []).length ? `
+      <div class="mb-3">
+        <label class="label">Quick template (optional)</label>
+        <select id="pp_template" class="input" onchange="loadTemplateIntoForm(this.value)">
+          <option value="">— Use blank form —</option>
+          ${(CACHE.rxTemplates || []).map(t => `<option value="${t.id}" ${templateId===t.id?'selected':''}>${esc(t.name)}</option>`).join('')}
+        </select>
+      </div>
+    ` : ''}
+
     <div class="mb-3">
       <label class="label">Patient *</label>
       <input id="pp_patient" class="input" placeholder="Type name…" ${pid ? 'disabled' : ''}>
@@ -2223,9 +2515,12 @@ function pharmPrescribeModal(pid) {
     </div>
 
     <div id="pp_items" class="space-y-2 mb-3"></div>
-    <button onclick="addRxItem()" class="btn btn-secondary text-sm mb-3">+ Add Drug</button>
+    <div class="flex gap-2 mb-3">
+      <button onclick="addRxItem()" class="btn btn-secondary text-sm">+ Add Drug</button>
+      <button onclick="saveAsTemplateModal()" class="btn btn-secondary text-sm">💾 Save as Template</button>
+    </div>
 
-    <div class="mb-3"><label class="label">Notes</label><textarea id="pp_notes" class="input" rows="2"></textarea></div>
+    <div class="mb-3"><label class="label">Notes</label><textarea id="pp_notes" class="input" rows="2">${tmpl && tmpl.notes ? esc(tmpl.notes) : ''}</textarea></div>
 
     <div class="flex justify-end gap-2">
       <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
@@ -2237,27 +2532,46 @@ function pharmPrescribeModal(pid) {
     const p = CACHE.patients.find(x => x.id === pid);
     if (p) { const inp = document.getElementById('pp_patient'); inp.value = patientName(p); inp.dataset.patientId = pid; }
   }
-  addRxItem();
+  // Prefill from template or add one blank row
+  if (tmpl && tmpl.items && tmpl.items.length) {
+    tmpl.items.forEach(it => addRxItem(it));
+  } else {
+    addRxItem();
+  }
 }
 
-function addRxItem() {
+function loadTemplateIntoForm(templateId) {
+  const wrap = document.getElementById('pp_items');
+  wrap.innerHTML = '';
+  if (!templateId) { addRxItem(); return; }
+  const t = (CACHE.rxTemplates || []).find(x => x.id === templateId);
+  if (!t) return;
+  (t.items || []).forEach(it => addRxItem(it));
+  const notes = document.getElementById('pp_notes');
+  if (notes && t.notes) notes.value = t.notes;
+}
+
+
+function addRxItem(preset) {
   const wrap = document.getElementById('pp_items');
   const id = 'rx_' + Date.now() + Math.random().toString(36).slice(2,6);
   const drugs = CACHE.drugs;
+  const preDrugId = preset?.drugId || '';
+  const preQty = preset?.qty || 1;
+  const preSig = preset?.sig || '';
   wrap.appendChild(el(`<div class="grid grid-cols-12 gap-2 items-end" id="${id}">
     <div class="col-span-6">
       <label class="label">Drug</label>
-      ${drugs.length ? `<select class="input rx-drug" onchange="rxDrugChange(this)">
+      ${drugs.length ? `<select class="input rx-drug">
         <option value="">— Select drug —</option>
-        ${drugs.map(d => `<option value="${d.id}" data-name="${esc(d.name)}" data-price="${d.price||0}" data-stock="${d.stock||0}">${esc(d.name)} ${d.strength?'· '+esc(d.strength):''}</option>`).join('')}
+        ${drugs.map(d => `<option value="${d.id}" data-name="${esc(d.name)}" data-price="${d.price||0}" data-stock="${d.stock||0}" ${preDrugId===d.id?'selected':''}>${esc(d.name)} ${d.strength?'· '+esc(d.strength):''}</option>`).join('')}
       </select>` : '<input class="input rx-drug-name" placeholder="Type drug name">'}
     </div>
-    <div class="col-span-2"><label class="label">Qty</label><input type="number" class="input rx-qty" value="1" min="1"></div>
-    <div class="col-span-3"><label class="label">Dosage / Frequency</label><input class="input rx-sig" placeholder="e.g. 1 tab TID x 5d"></div>
+    <div class="col-span-2"><label class="label">Qty</label><input type="number" class="input rx-qty" value="${preQty}" min="1"></div>
+    <div class="col-span-3"><label class="label">Dosage / Frequency</label><input class="input rx-sig" placeholder="e.g. 1 tab TID x 5d" value="${esc(preSig)}"></div>
     <div class="col-span-1"><button onclick="document.getElementById('${id}').remove()" class="btn btn-danger w-full">×</button></div>
   </div>`));
 }
-
 function rxDrugChange(sel) {
   // Reserved for future use
 }
