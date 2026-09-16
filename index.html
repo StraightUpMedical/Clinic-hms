@@ -342,15 +342,17 @@ function renderPatientRows(list) {
   }).join('');
 }
 
+
 async function generatePatientNumber() {
   const year = new Date().getFullYear();
-  const snap = await db.collection('counters').doc('patients').get();
-  let n = 1;
-  if (snap.exists) n = (snap.data().last || 0) + 1;
-  await db.collection('counters').doc('patients').set({ last: n });
-  return `P${year}-${String(n).padStart(4, '0')}`;
+  const ref = db.collection('counters').doc('patients');
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const n = snap.exists ? (snap.data().last || 0) + 1 : 1;
+    tx.set(ref, { last: n });
+    return `P${year}-${String(n).padStart(4,'0')}`;
+  });
 }
-
 async function newPatientModal() {
   const number = await generatePatientNumber();
   openModal(`
@@ -978,7 +980,7 @@ function flagLabResult(test, resultValue) {
 
   // 1) Numeric range check (if test has "range" like "4-11" or "4 - 11")
   if (test.range) {
-    const m = String(test.range).match(/^\s*(-?\d+\.?\d*)\s*[-–to]+\s*(-?\d+\.?\d*)\s*$/i);
+    const m = String(test.range).match(/^\s*(-?\d+\.?\d*)\s*(?:-|–|to)\s*(-?\d+\.?\d*)\s*$/i);
     if (m) {
       const min = parseFloat(m[1]);
       const max = parseFloat(m[2]);
@@ -2463,10 +2465,13 @@ async function viewQueue(c) {
 
 async function nextQueueNumber() {
   const today = todayStr();
-  const snap = await db.collection('queue').where('date','==',today).get();
-  const nums = snap.docs.map(d => d.data().tokenNumber || 0);
-  const max = nums.length ? Math.max(...nums) : 0;
-  return max + 1;
+  const ref = db.collection('counters').doc('queue_' + today);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const n = snap.exists ? (snap.data().last || 0) + 1 : 1;
+    tx.set(ref, { last: n });
+    return n;
+  });
 }
 
 async function newQueueToken() {
@@ -2996,6 +3001,167 @@ function renderInteractionWarnings(warnings, containerId) {
     </div>
   `;
 }  
+  // ============================================================
+// DRUG BATCH / EXPIRY HELPERS
+// ============================================================
+function todayStr2() { return new Date().toISOString().slice(0,10); }
+
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const target = new Date(dateStr);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = (target - today) / 86400000;
+  return Math.floor(diff);
+}
+
+function getBatchStatus(batch) {
+  if (!batch.expiry) return { status: 'unknown', label: 'No expiry', color: 'bg-gray-100 text-gray-700' };
+  const days = daysUntil(batch.expiry);
+  if (days < 0)  return { status: 'expired', label: `Expired ${-days}d ago`, color: 'bg-red-100 text-red-700', days };
+  if (days <= 30) return { status: 'urgent', label: `${days}d left`, color: 'bg-orange-100 text-orange-800', days };
+  if (days <= 90) return { status: 'soon', label: `${days}d left`, color: 'bg-yellow-100 text-yellow-800', days };
+  return { status: 'ok', label: `${days}d left`, color: 'bg-green-100 text-green-700', days };
+}
+
+function computeStock(drug) {
+  if (!drug.batches || !drug.batches.length) return drug.stock || 0;
+  return drug.batches
+    .filter(b => !b.expiry || new Date(b.expiry) >= new Date(todayStr2()))
+    .reduce((s,b) => s + (b.qty || 0), 0);
+}
+
+function totalStockIncludingExpired(drug) {
+  if (!drug.batches || !drug.batches.length) return drug.stock || 0;
+  return drug.batches.reduce((s,b) => s + (b.qty || 0), 0);
+}
+ // ============================================================
+// BATCH MANAGEMENT SCREEN
+// ============================================================
+async function manageDrugBatches(drugId) {
+  const doc = await db.collection('drugs').doc(drugId).get();
+  if (!doc.exists) return toast('Drug not found', 'error');
+  const drug = { id: drugId, ...doc.data() };
+  const batches = drug.batches || [];
+
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <div>
+        <h3 class="text-xl font-bold">${esc(drug.name)} ${drug.strength ? '· '+esc(drug.strength) : ''}</h3>
+        <p class="text-sm text-gray-500">Manage batches, expiry dates, and stock</p>
+      </div>
+      <button onclick="closeModal();manageDrugCatalog()" class="btn btn-secondary">Back</button>
+    </div>
+
+    <div class="bg-blue-50 border border-blue-200 p-3 rounded mb-3 text-sm">
+      <b>Total stock:</b> ${computeStock(drug)} units in-date · ${batches.filter(b => b.expiry && new Date(b.expiry) < new Date(todayStr2())).reduce((s,b)=>s+(b.qty||0),0)} expired<br>
+      <b>Total units:</b> ${totalStockIncludingExpired(drug)}
+    </div>
+
+    <div class="bg-gray-50 p-3 rounded mb-3">
+      <h4 class="font-semibold mb-2">Add new batch</h4>
+      <div class="grid grid-cols-12 gap-2">
+        <input id="b_batch" class="input col-span-3" placeholder="Batch no.">
+        <input id="b_qty" type="number" class="input col-span-2" placeholder="Qty">
+        <input id="b_expiry" type="date" class="input col-span-3" placeholder="Expiry">
+        <input id="b_supplier" class="input col-span-3" placeholder="Supplier (optional)">
+        <button onclick="addBatch('${drugId}')" class="btn btn-primary col-span-1">+</button>
+      </div>
+    </div>
+
+    <div class="max-h-96 overflow-y-auto">
+      ${batches.length ? `<table><thead><tr>
+        <th>Batch</th><th>Qty</th><th>Expiry</th><th>Status</th><th>Supplier</th><th></th>
+      </tr></thead><tbody>
+        ${batches.map((b,i) => {
+          const s = getBatchStatus(b);
+          return `<tr>
+            <td><b>${esc(b.batch || '—')}</b></td>
+            <td>${b.qty || 0}</td>
+            <td>${esc(b.expiry || '—')}</td>
+            <td><span class="badge ${s.color}">${esc(s.label)}</span></td>
+            <td class="text-xs text-gray-600">${esc(b.supplier || '')}</td>
+            <td class="whitespace-nowrap">
+              <button onclick="removeBatch('${drugId}', ${i})" class="text-red-600 text-sm">Remove</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400 text-center py-6">No batches yet. Add one above.</p>'}
+    </div>
+
+    <div class="flex justify-end mt-4">
+      <button onclick="closeModal();manageDrugCatalog()" class="btn btn-secondary">Close</button>
+    </div>
+  `, 'max-w-4xl');
+}
+
+async function addBatch(drugId) {
+  const batch = document.getElementById('b_batch').value.trim();
+  const qty = parseInt(document.getElementById('b_qty').value) || 0;
+  const expiry = document.getElementById('b_expiry').value;
+  const supplier = document.getElementById('b_supplier').value.trim();
+
+  if (!batch) return toast('Batch number required', 'error');
+  if (qty <= 0) return toast('Quantity must be > 0', 'error');
+  if (!expiry) return toast('Expiry date required', 'error');
+
+  const doc = await db.collection('drugs').doc(drugId).get();
+  const drug = doc.data();
+  const batches = drug.batches || [];
+
+  batches.push({
+    batch, qty, expiry, supplier,
+    addedAt: new Date().toISOString(),
+    addedBy: CURRENT_USER.uid
+  });
+
+  await db.collection('drugs').doc(drugId).update({
+    batches,
+    stock: computeStock({ ...drug, batches })
+  });
+
+  await loadCache();
+  toast('Batch added', 'success');
+  manageDrugBatches(drugId);
+}
+
+async function removeBatch(drugId, index) {
+  const doc = await db.collection('drugs').doc(drugId).get();
+  const drug = doc.data();
+  const batches = (drug.batches || []).slice();
+  if (index < 0 || index >= batches.length) return;
+
+  const b = batches[index];
+  if (!confirm(`Remove batch ${b.batch} (${b.qty} units, expires ${b.expiry})?`)) return;
+
+  batches.splice(index, 1);
+  await db.collection('drugs').doc(drugId).update({
+    batches,
+    stock: computeStock({ ...drug, batches })
+  });
+
+  await loadCache();
+  toast('Batch removed', 'success');
+  manageDrugBatches(drugId);
+}
+
+// ============================================================
+// EXPIRY ALERTS
+// ============================================================
+function getExpiryAlerts(drugs) {
+  const expired = [];
+  const urgent = [];   // <= 30 days
+  const soon = [];     // 31-90 days
+  drugs.forEach(d => {
+    (d.batches || []).forEach(b => {
+      const s = getBatchStatus(b);
+      const entry = { drug: d, batch: b, status: s };
+      if (s.status === 'expired') expired.push(entry);
+      else if (s.status === 'urgent') urgent.push(entry);
+      else if (s.status === 'soon') soon.push(entry);
+    });
+  });
+  return { expired, urgent, soon };
+} 
 // ============================================================
 // PHARMACY MODULE
 // ============================================================
@@ -3013,7 +3179,7 @@ async function viewPharmacy(c) {
   const pending = rxs.filter(r => r.status === 'pending');
   const dispensed = rxs.filter(r => r.status === 'dispensed');
   const lowStock = CACHE.drugs.filter(d => (d.stock||0) <= (d.reorder||0));
-
+const alerts = getExpiryAlerts(CACHE.drugs);
   c.innerHTML = `
     <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
       <h2 class="text-2xl font-bold">Pharmacy</h2>
@@ -3028,7 +3194,22 @@ async function viewPharmacy(c) {
       <b class="text-red-700">⚠ Low stock:</b>
       <span class="text-sm">${lowStock.map(d => `${esc(d.name)} (${d.stock||0})`).join(', ')}</span>
     </div>` : ''}
+${alerts.expired.length ? `<div class="card p-3 mb-4 bg-red-50 border border-red-300">
+  <b class="text-red-700">🔴 Expired batches (${alerts.expired.length}):</b>
+  <div class="text-sm mt-1">${alerts.expired.map(a => `${esc(a.drug.name)} — batch ${esc(a.batch.batch)} (${a.batch.qty} units, expired ${a.batch.expiry})`).join('<br>')}</div>
+  <div class="text-xs text-red-600 mt-2">Remove these from stock immediately.</div>
+</div>` : ''}
 
+${alerts.urgent.length ? `<div class="card p-3 mb-4 bg-orange-50 border border-orange-300">
+  <b class="text-orange-800">🟠 Expiring within 30 days (${alerts.urgent.length}):</b>
+  <div class="text-sm mt-1">${alerts.urgent.map(a => `${esc(a.drug.name)} — batch ${esc(a.batch.batch)} (${a.batch.qty} units, ${a.status.label})`).join('<br>')}</div>
+  <div class="text-xs text-orange-600 mt-2">Dispense these first (FIFO).</div>
+</div>` : ''}
+
+${alerts.soon.length ? `<div class="card p-3 mb-4 bg-yellow-50 border border-yellow-300">
+  <b class="text-yellow-800">🟡 Expiring within 90 days (${alerts.soon.length}):</b>
+  <div class="text-xs mt-1">${alerts.soon.map(a => `${esc(a.drug.name)} — batch ${esc(a.batch.batch)} (${a.status.label})`).join(' · ')}</div>
+</div>` : ''}
     <div class="card p-4 mb-4">
       <h3 class="font-semibold mb-2">Prescription Templates (${CACHE.rxTemplates.length})</h3>
       ${CACHE.rxTemplates.length ? `<div class="flex flex-wrap gap-2">
@@ -3097,7 +3278,6 @@ function pharmPrescribeModal(pid, templateId) {
 
     <div id="pp_items" class="space-y-2 mb-3"></div>
         <div id="pp_warnings"></div>
-    <div id="pp_warnings"></div>
     <div class="flex gap-2 mb-3">
       <button onclick="addRxItem()" class="btn btn-secondary text-sm">+ Add Drug</button>
       <button onclick="saveAsTemplateModal()" class="btn btn-secondary text-sm">💾 Save as Template</button>
@@ -3256,7 +3436,7 @@ async function dispenseModal(rxId) {
       ${(r.items||[]).map(i => {
         const d = CACHE.drugs.find(x => x.id === i.drugId);
         return `<tr><td>${esc(i.name)}</td><td>${i.qty}</td><td>${esc(i.sig||'')}</td>
-          <td>${d ? (d.stock||0) : '—'}</td></tr>`;
+        <td>${d ? computeStock(d) : '—'}</td>  
       }).join('')}
     </tbody></table>
 
@@ -3270,19 +3450,52 @@ async function confirmDispense(rxId) {
   const doc = await db.collection('prescriptions').doc(rxId).get();
   const r = doc.data();
   const batch = db.batch();
+
   for (const item of r.items || []) {
     if (!item.drugId) continue;
     const dref = db.collection('drugs').doc(item.drugId);
     const ds = await dref.get();
     if (!ds.exists) continue;
-    const cur = ds.data().stock || 0;
-    batch.update(dref, { stock: Math.max(0, cur - item.qty) });
+    const drug = ds.data();
+
+    let remaining = item.qty;
+
+    // If drug has batches → FIFO deduct from non-expired, oldest-expiry first
+    if (drug.batches && drug.batches.length) {
+      const batches = drug.batches.map(b => ({ ...b }));
+      // Sort: non-expired first by expiry ascending
+      batches.sort((a, b) => {
+        const da = a.expiry ? new Date(a.expiry) : new Date('9999-12-31');
+        const db_ = b.expiry ? new Date(b.expiry) : new Date('9999-12-31');
+        return da - db_;
+      });
+
+      for (const b of batches) {
+        if (remaining <= 0) break;
+        // Skip expired
+        if (b.expiry && new Date(b.expiry) < new Date(todayStr2())) continue;
+        const take = Math.min(b.qty || 0, remaining);
+        b.qty = (b.qty || 0) - take;
+        remaining -= take;
+      }
+
+      batch.update(dref, {
+        batches,
+        stock: computeStock({ ...drug, batches })
+      });
+    } else {
+      // Fallback: no batches → old behavior
+      const cur = drug.stock || 0;
+      batch.update(dref, { stock: Math.max(0, cur - item.qty) });
+    }
   }
+
   batch.update(db.collection('prescriptions').doc(rxId), {
     status: 'dispensed',
     dispensedAt: firebase.firestore.FieldValue.serverTimestamp(),
     dispensedBy: CURRENT_USER.uid
   });
+
   await batch.commit();
   toast('Dispensed', 'success');
   closeModal(); renderView('pharmacy');
@@ -3308,16 +3521,32 @@ async function manageDrugCatalog() {
     </div>
     <div class="max-h-96 overflow-y-auto">
     <table><thead><tr>
-      <th>Name</th><th>Form</th><th>Strength</th><th>Price</th><th>Stock</th><th>Reorder</th><th></th>
+     <th>Name</th><th>Form</th><th>Strength</th><th>Price</th><th>Stock</th><th>Batches</th><th>Reorder</th><th></th> 
     </tr></thead><tbody>
       ${items.map(d => `<tr id="dc_row_${d.id}">
         <td><input class="input dc-edit-name" value="${esc(d.name)}" style="display:none"><span class="dc-view-name">${esc(d.name)}</span></td>
         <td><input class="input dc-edit-form" value="${esc(d.form||'')}" style="display:none"><span class="dc-view-form">${esc(d.form||'')}</span></td>
         <td><input class="input dc-edit-strength" value="${esc(d.strength||'')}" style="display:none"><span class="dc-view-strength">${esc(d.strength||'')}</span></td>
         <td><input type="number" class="input dc-edit-price" value="${d.price||0}" style="display:none"><span class="dc-view-price">${d.price||0}</span></td>
-        <td><input type="number" class="input dc-edit-stock" value="${d.stock||0}" style="display:none"><span class="dc-view-stock">${d.stock||0}</span></td>
+        <td>
+  <input type="number" class="input dc-edit-stock" value="${d.stock||0}" style="display:none">
+  <span class="dc-view-stock">${computeStock(d)}</span>
+</td>
+<td class="text-xs">
+  ${(d.batches && d.batches.length) ? (() => {
+    const hasExpired = d.batches.some(b => b.expiry && new Date(b.expiry) < new Date(todayStr2()));
+    const hasUrgent = d.batches.some(b => {
+      const dd = daysUntil(b.expiry);
+      return dd !== null && dd >= 0 && dd <= 30;
+    });
+    if (hasExpired) return '<span class="badge bg-red-100 text-red-700">🔴 Expired</span>';
+    if (hasUrgent) return '<span class="badge bg-orange-100 text-orange-800">🟠 Expiring</span>';
+    return '<span class="badge bg-green-100 text-green-700">✓ OK</span>';
+  })() : '<span class="text-gray-400">—</span>'}
+</td>
         <td><input type="number" class="input dc-edit-reorder" value="${d.reorder||0}" style="display:none"><span class="dc-view-reorder">${d.reorder||0}</span></td>
         <td class="whitespace-nowrap">
+        <button onclick="manageDrugBatches('${d.id}')" class="text-purple-600 text-sm mr-2" title="Manage batches">📦</button>
           <button class="dc-edit-btn text-blue-600 text-sm" onclick="editDrugRow('${d.id}')">Edit</button>
           <button class="dc-save-btn text-green-600 text-sm hidden" onclick="saveDrugRow('${d.id}')">Save</button>
           <button class="dc-cancel-btn text-gray-500 text-sm hidden" onclick="cancelDrugRow('${d.id}')">Cancel</button>
@@ -3351,23 +3580,39 @@ function cancelDrugRow(id) {
 
 async function saveDrugRow(id) {
   const row = document.getElementById('dc_row_' + id);
+  const doc = await db.collection('drugs').doc(id).get();
+  if (!doc.exists) return toast('Drug not found', 'error');
+  const drug = doc.data();
+
   const data = {
     name: row.querySelector('.dc-edit-name').value.trim(),
     form: row.querySelector('.dc-edit-form').value.trim(),
     strength: row.querySelector('.dc-edit-strength').value.trim(),
     price: parseFloat(row.querySelector('.dc-edit-price').value) || 0,
-    stock: parseInt(row.querySelector('.dc-edit-stock').value) || 0,
     reorder: parseInt(row.querySelector('.dc-edit-reorder').value) || 0
   };
   if (!data.name) return toast('Name required', 'error');
+
+  // Only allow manual stock edit if no batches exist
+  if (drug.batches && drug.batches.length) {
+    data.stock = computeStock(drug);
+  } else {
+    data.stock = parseInt(row.querySelector('.dc-edit-stock').value) || 0;
+  }
+
   await db.collection('drugs').doc(id).update(data);
+  await loadCache();
   toast('Updated', 'success');
+
+  // ✅ Update the displayed spans so the row reflects the new values
   row.querySelector('.dc-view-name').textContent = data.name;
-  row.querySelector('.dc-view-form').textContent = data.form;
-  row.querySelector('.dc-view-strength').textContent = data.strength;
+  row.querySelector('.dc-view-form').textContent = data.form || '—';
+  row.querySelector('.dc-view-strength').textContent = data.strength || '—';
   row.querySelector('.dc-view-price').textContent = data.price;
   row.querySelector('.dc-view-stock').textContent = data.stock;
   row.querySelector('.dc-view-reorder').textContent = data.reorder;
+
+  // ✅ Exit edit mode (re-shows Edit/Delete, hides Save/Cancel)
   cancelDrugRow(id);
 }
 async function addDrug() {
@@ -3531,7 +3776,36 @@ async function deletePayment(paymentId) {
   const pt = CACHE.patients.find(x => x.id === p.patientId);
   const name = pt ? patientName(pt) : (p.patientName || '—');
 
-  if (!confirm(`Delete this payment?\n\nPatient: ${name}\nAmount: KES ${amount}\nMode: ${mode}\n\nThis cannot be undone.`)) return;
+    if (!confirm(`Delete this payment?\n\nPatient: ${name}\nAmount: KES ${amount}\nMode: ${mode}\n\nThis cannot be undone.`)) return;
+
+  // 🔗 If this payment is linked to an invoice, roll back its paid amount
+  if (p.invoiceId) {
+    try {
+      const invRef = db.collection('invoices').doc(p.invoiceId);
+      const invDoc = await invRef.get();
+      if (invDoc.exists) {
+        const inv = invDoc.data();
+        const newPaid = Math.max(0, (inv.paid || 0) - (p.amount || 0));
+        const newStatus = inv.status === 'cancelled'
+          ? 'cancelled'
+          : newPaid <= 0
+            ? 'issued'
+            : newPaid >= (inv.total || 0)
+              ? 'paid'
+              : 'partial';
+        await invRef.update({
+          paid: newPaid,
+          status: newStatus,
+          lastPaymentDeletedAt: firebase.firestore.FieldValue.serverTimestamp()
+        });
+      }
+    } catch (e) {
+      console.error('Failed to roll back invoice:', e);
+      toast('Payment deleted, but invoice rollback failed: ' + e.message, 'error');
+      renderView('payments');
+      return;
+    }
+  }
 
   await db.collection('payments').doc(paymentId).delete();
   toast('Payment deleted', 'success');
@@ -4348,7 +4622,7 @@ async function unlockDay(dateStr) {
 }
 async function showPatientBalance(pid) {
   const start = new Date(); start.setDate(start.getDate()-30);
-  const startStr = start.toISOString().toISOString ? start.toISOString().slice(0,10) : start.toISOString().slice(0,10);
+  const startStr = start.toISOString().slice(0,10);
   const snap = await db.collection('payments').where('patientId','==',pid).get();
   const pays = snap.docs.map(x => x.data()).filter(p => (p.date||'') >= startStr);
   const p = CACHE.patients.find(x => x.id === pid);
@@ -4454,11 +4728,13 @@ function invFilter(s) { INV_STATUS_FILTER = s; renderView('invoices'); }
 
 async function nextInvoiceNumber() {
   const year = new Date().getFullYear();
-  const snap = await db.collection('counters').doc('invoices_' + year).get();
-  let n = 1;
-  if (snap.exists) n = (snap.data().last || 0) + 1;
-  await db.collection('counters').doc('invoices_' + year).set({ last: n });
-  return `INV-${year}-${String(n).padStart(4,'0')}`;
+  const ref = db.collection('counters').doc('invoices_' + year);
+  return db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const n = snap.exists ? (snap.data().last || 0) + 1 : 1;
+    tx.set(ref, { last: n });
+    return `INV-${year}-${String(n).padStart(4,'0')}`;
+  });
 }
 
 async function newInvoiceModal() {
