@@ -44,15 +44,30 @@
       <img src="logo.png" alt="Logo" style="max-width:140px;max-height:80px;margin:0 auto;display:block">
     </div>
     <h1 class="text-2xl font-bold text-center mb-1">StraightUpMedical</h1>
-    <p class="text-center text-gray-500 text-sm mb-6">Sign in to continue</p>
+    <p class="text-center text-gray-500 text-sm mb-6">Enter your PIN</p>
 
-    <div id="loginError" class="hidden bg-red-100 text-red-700 p-2 rounded mb-3 text-sm"></div>
-    <label class="label">Email</label>
-    <input id="loginEmail" type="email" class="input mb-3" placeholder="you@clinic.com">
-    <label class="label">Password</label>
-    <input id="loginPassword" type="password" class="input mb-4" placeholder="••••••••">
-    <button onclick="doLogin()" class="btn btn-primary w-full">Sign In</button>
-    <p class="text-xs text-gray-400 text-center mt-4">First time? Ask admin to create your account.</p>
+    <div id="loginError" class="hidden bg-red-100 text-red-700 p-2 rounded mb-3 text-sm text-center"></div>
+
+    <input id="pinDisplay" type="password" class="input mb-3 text-center text-2xl tracking-widest" readonly value="" placeholder="____">
+
+    <div class="grid grid-cols-3 gap-2 mb-3">
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('1')">1</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('2')">2</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('3')">3</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('4')">4</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('5')">5</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('6')">6</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('7')">7</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('8')">8</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('9')">9</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinClear()">C</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinAppend('0')">0</button>
+      <button class="btn btn-secondary py-3 text-xl" onclick="pinDelete()">⌫</button>
+    </div>
+
+    <button onclick="pinSubmit()" class="btn btn-primary w-full py-3">Enter</button>
+
+    <p class="text-xs text-gray-400 text-center mt-4">Forgot PIN? Ask admin.</p>
   </div>
 </div>
 
@@ -92,6 +107,85 @@ firebase.initializeApp(firebaseConfig);
 const auth = firebase.auth();
 const db = firebase.firestore();
 
+
+ // ---------- PIN LOGIN ----------
+let PIN_INPUT = '';
+
+function pinAppend(digit) {
+  if (PIN_INPUT.length >= 4) return;
+  PIN_INPUT += digit;
+  const el = document.getElementById('pinDisplay');
+  if (el) el.value = '●'.repeat(PIN_INPUT.length);
+}
+
+function pinDelete() {
+  PIN_INPUT = PIN_INPUT.slice(0, -1);
+  const el = document.getElementById('pinDisplay');
+  if (el) el.value = '●'.repeat(PIN_INPUT.length);
+}
+
+function pinClear() {
+  PIN_INPUT = '';
+  const el = document.getElementById('pinDisplay');
+  if (el) el.value = '';
+}
+
+async function pinSubmit() {
+  if (PIN_INPUT.length < 4) {
+    pinShowError('Enter a 4-digit PIN');
+    return;
+  }
+
+  const pin = PIN_INPUT;
+  pinClear();
+  pinShowError('');
+
+  try {
+    const doc = await db.collection('pinCodes').doc(pin).get();
+    if (!doc.exists) {
+      pinShowError('Invalid PIN');
+      return;
+    }
+
+    const data = doc.data();
+    if (!data.email || !data.password) {
+      pinShowError('PIN not configured. Contact admin.');
+      return;
+    }
+
+    await auth.signInWithEmailAndPassword(data.email, data.password);
+  } catch (e) {
+    console.error('PIN login error:', e);
+    if (e.code === 'auth/user-not-found' || e.code === 'auth/wrong-password') {
+      pinShowError('Invalid PIN');
+    } else if (e.code === 'permission-denied') {
+      pinShowError('Access denied. Contact admin.');
+    } else {
+      pinShowError('Login failed: ' + e.message);
+    }
+  }
+}
+
+function pinShowError(msg) {
+  const el = document.getElementById('loginError');
+  if (!el) return;
+  if (!msg) {
+    el.classList.add('hidden');
+  } else {
+    el.textContent = msg;
+    el.classList.remove('hidden');
+  }
+}
+
+// Physical keyboard support on the PIN screen
+document.addEventListener('keydown', (e) => {
+  const loginScreen = document.getElementById('loginScreen');
+  if (!loginScreen || loginScreen.classList.contains('hidden')) return;
+  if (e.key >= '0' && e.key <= '9') pinAppend(e.key);
+  else if (e.key === 'Backspace') pinDelete();
+  else if (e.key === 'Enter') pinSubmit();
+  else if (e.key === 'Escape') pinClear();
+}); 
 // ---------- GLOBAL STATE ----------
 let CURRENT_USER = null;
 let CURRENT_VIEW = 'dashboard';
