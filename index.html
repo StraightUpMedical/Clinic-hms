@@ -162,6 +162,7 @@ const NAV_ITEMS = [
   { key: 'pharmacy',      label: 'Pharmacy',      roles: ['admin','pharmacy','doctor'] },
   { key: 'orthopedics',   label: 'Orthopedics',   roles: ['admin','doctor'] },
   { key: 'payments',      label: 'Payments',      roles: ['admin','cashier','reception'] },
+  { key: 'invoices', label: 'Invoices', roles: ['admin','cashier','reception'] },
   { key: 'reports', label: 'Reports', roles: ['admin','doctor','cashier'] },
   { key: 'admin',         label: 'Admin',         roles: ['admin'] }
 ];
@@ -249,6 +250,7 @@ async function renderView(key) {
     else if (key === 'pharmacy')    await viewPharmacy(c);
     else if (key === 'orthopedics') await viewOrthopedics(c);
     else if (key === 'payments')    await viewPayments(c);
+    else if (key === 'invoices') await viewInvoices(c);  
     else if (key === 'reports') await viewReports(c);  
     else if (key === 'admin')       await viewAdmin(c);
   } catch (e) {
@@ -461,6 +463,7 @@ async function openPatient(patientId) {
       <button onclick="closeModal();goRadiology('${patientId}')" class="btn btn-primary text-sm">+ Radiology</button>
       <button onclick="closeModal();goPharmacy('${patientId}')" class="btn btn-primary text-sm">+ Prescription</button>
       <button onclick="closeModal();goPayment('${patientId}')" class="btn btn-primary text-sm">+ Payment</button>
+      <button onclick="closeModal();goPatientInvoices('${patientId}')" class="btn btn-secondary text-sm">📄 Invoices</button>
       <button onclick="printPatientCard('${patientId}')" class="btn btn-secondary text-sm">🆔 ID Card</button>
       <button onclick="window.print()" class="btn btn-secondary text-sm">🖨 Print Record</button>
     </div>
@@ -501,6 +504,32 @@ function goRadiology(pid)  { renderView('radiology');    setTimeout(()=>radSelec
 function goPharmacy(pid)   { renderView('pharmacy');     setTimeout(()=>pharmSelectPatient(pid), 100); }
 function goPayment(pid)    { renderView('payments');     setTimeout(()=>paySelectPatient(pid), 100); }
 function goReferral(pid)   { renderView('referral');   setTimeout(()=>referralSelectPatient(pid), 100); }
+async function goPatientInvoices(pid) {
+  const snap = await db.collection('invoices').where('patientId','==',pid).orderBy('createdAt','desc').get();
+  const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Invoices</h3>
+      <button onclick="closeModal()" class="btn btn-secondary">Close</button>
+    </div>
+    ${items.length ? `<table><thead><tr>
+      <th>#</th><th>Date</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th></th>
+    </tr></thead><tbody>
+      ${items.map(i => {
+        const bal = Math.max(0, (i.total||0) - (i.paid||0));
+        return `<tr>
+          <td>${esc(i.number||'DRAFT')}</td>
+          <td>${esc(i.date||'')}</td>
+          <td>KES ${(i.total||0).toLocaleString()}</td>
+          <td>KES ${(i.paid||0).toLocaleString()}</td>
+          <td class="${bal>0?'text-red-600 font-bold':''}">KES ${bal.toLocaleString()}</td>
+          <td>${esc(i.status||'draft')}</td>
+          <td><button onclick="closeModal();invoiceView('${i.id}')" class="text-blue-600 text-sm">Open</button></td>
+        </tr>`;
+      }).join('')}
+    </tbody></table>` : '<p class="text-gray-400">No invoices for this patient.</p>'}
+  `, 'max-w-3xl');
+}  
 async function openEvent(type, id) {
   const collMap = { Visit:'visits', Vitals:'vitals', Lab:'labOrders', Radiology:'radiologyOrders', Prescription:'prescriptions', Payment:'payments' };
   const snap = await db.collection(collMap[type]).doc(id).get();
@@ -3070,7 +3099,443 @@ function reportJump(d) {
   REPORT_DATE = d;
   renderView('reports');
 }
+// ============================================================
+// INVOICES MODULE
+// ============================================================
+let INV_STATUS_FILTER = 'all';
 
+async function viewInvoices(c) {
+  const snap = await db.collection('invoices').orderBy('createdAt','desc').limit(200).get();
+  const all = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  const filtered = INV_STATUS_FILTER === 'all'
+    ? all
+    : all.filter(i => (i.status||'draft') === INV_STATUS_FILTER);
+
+  const totals = {
+    issued: all.filter(i => i.status === 'issued' || i.status === 'partial').reduce((s,i) => s + (i.total||0), 0),
+    outstanding: all.filter(i => i.status === 'issued' || i.status === 'partial')
+      .reduce((s,i) => s + Math.max(0, (i.total||0) - (i.paid||0)), 0),
+    paid: all.filter(i => i.status === 'paid').reduce((s,i) => s + (i.total||0), 0)
+  };
+
+  c.innerHTML = `
+    <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
+      <h2 class="text-2xl font-bold">Invoices</h2>
+      <div class="flex gap-2">
+        <button onclick="newInvoiceModal()" class="btn btn-primary">+ New Invoice</button>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+      <div class="card p-3"><div class="text-xs text-gray-500">Total Invoiced (open)</div><div class="text-xl font-bold">KES ${totals.issued.toLocaleString()}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Outstanding</div><div class="text-xl font-bold text-red-600">KES ${totals.outstanding.toLocaleString()}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Paid (all-time)</div><div class="text-xl font-bold text-green-700">KES ${totals.paid.toLocaleString()}</div></div>
+      <div class="card p-3"><div class="text-xs text-gray-500">Invoices</div><div class="text-xl font-bold">${all.length}</div></div>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <div class="flex gap-2 flex-wrap">
+        ${['all','draft','issued','partial','paid','overdue','cancelled'].map(s => `
+          <button onclick="invFilter('${s}')" class="px-3 py-1 rounded text-sm ${INV_STATUS_FILTER===s ? 'bg-blue-600 text-white' : 'bg-gray-100'}">
+            ${s.charAt(0).toUpperCase()+s.slice(1)}
+          </button>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="card p-4">
+      <h3 class="font-semibold mb-2">${INV_STATUS_FILTER === 'all' ? 'All' : INV_STATUS_FILTER.charAt(0).toUpperCase()+INV_STATUS_FILTER.slice(1)} (${filtered.length})</h3>
+      ${filtered.length ? `<table><thead><tr>
+        <th>Invoice #</th><th>Date</th><th>Patient</th><th>Total</th><th>Paid</th><th>Balance</th><th>Status</th><th></th>
+      </tr></thead><tbody>
+        ${filtered.map(i => {
+          const p = CACHE.patients.find(x => x.id === i.patientId);
+          const bal = Math.max(0, (i.total||0) - (i.paid||0));
+          const statusColor = i.status === 'paid' ? 'bg-green-100 text-green-700' :
+                              i.status === 'partial' ? 'bg-yellow-100 text-yellow-700' :
+                              i.status === 'issued' ? 'bg-blue-100 text-blue-700' :
+                              i.status === 'overdue' ? 'bg-red-100 text-red-700' :
+                              i.status === 'cancelled' ? 'bg-gray-200 text-gray-700' :
+                              'bg-gray-100 text-gray-600';
+          return `<tr>
+            <td><b>${esc(i.number||'—')}</b></td>
+            <td>${esc(i.date||'')}</td>
+            <td>${esc(p ? patientName(p) : i.patientName || '—')}</td>
+            <td>KES ${(i.total||0).toLocaleString()}</td>
+            <td>KES ${(i.paid||0).toLocaleString()}</td>
+            <td class="${bal > 0 ? 'text-red-600 font-bold' : ''}">KES ${bal.toLocaleString()}</td>
+            <td><span class="badge ${statusColor}">${esc(i.status||'draft')}</span></td>
+            <td class="whitespace-nowrap">
+              <button onclick="invoiceView('${i.id}')" class="text-blue-600 text-sm">Open</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody></table>` : '<p class="text-gray-400">No invoices match this filter.</p>'}
+    </div>`;
+}
+
+function invFilter(s) { INV_STATUS_FILTER = s; renderView('invoices'); }
+
+async function nextInvoiceNumber() {
+  const year = new Date().getFullYear();
+  const snap = await db.collection('counters').doc('invoices_' + year).get();
+  let n = 1;
+  if (snap.exists) n = (snap.data().last || 0) + 1;
+  await db.collection('counters').doc('invoices_' + year).set({ last: n });
+  return `INV-${year}-${String(n).padStart(4,'0')}`;
+}
+
+async function newInvoiceModal() {
+  await refreshPatients();
+  const today = todayStr();
+  const dueDate = new Date(); dueDate.setDate(dueDate.getDate() + 14);
+
+  openModal(`
+    <h3 class="text-xl font-bold mb-4">New Invoice (Draft)</h3>
+
+    <div class="mb-3">
+      <label class="label">Patient *</label>
+      <input id="inv_patient" class="input" placeholder="Type name…">
+      <div id="inv_patient_list" class="border rounded mt-1 max-h-40 overflow-y-auto"></div>
+    </div>
+
+    <div class="grid grid-cols-3 gap-3 mb-3">
+      <div><label class="label">Invoice date</label><input id="inv_date" type="date" class="input" value="${today}"></div>
+      <div><label class="label">Due date</label><input id="inv_due" type="date" class="input" value="${dueDate.toISOString().slice(0,10)}"></div>
+      <div><label class="label">Notes</label><input id="inv_notes" class="input"></div>
+    </div>
+
+    <h4 class="font-semibold text-sm mb-1 mt-4">Line items</h4>
+    <div id="inv_items" class="space-y-2 mb-2"></div>
+    <button onclick="addInvItem()" class="btn btn-secondary text-sm mb-3">+ Add Item</button>
+
+    <div class="bg-gray-50 p-3 rounded mb-3 flex justify-end gap-4">
+      <span>Total:</span><b id="inv_total">KES 0</b>
+    </div>
+
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="saveInvoice('draft')" class="btn btn-secondary">Save as Draft</button>
+      <button onclick="saveInvoice('issued')" class="btn btn-primary">Save & Issue</button>
+    </div>
+  `, 'max-w-3xl');
+
+  patientPicker('inv_patient', () => {});
+  addInvItem();
+}
+
+function addInvItem() {
+  const wrap = document.getElementById('inv_items');
+  const id = 'ii_' + Date.now() + Math.random().toString(36).slice(2,5);
+  wrap.appendChild(el(`<div class="grid grid-cols-12 gap-2" id="${id}">
+    <input class="input col-span-6 inv-desc" placeholder="Description (e.g. Consultation, CBC, Amoxicillin)">
+    <input type="number" class="input col-span-2 inv-qty" placeholder="Qty" value="1" min="1" oninput="updateInvTotal()">
+    <input type="number" class="input col-span-3 inv-price" placeholder="Unit price" oninput="updateInvTotal()">
+    <button onclick="document.getElementById('${id}').remove();updateInvTotal()" class="btn btn-danger col-span-1">×</button>
+  </div>`));
+}
+
+function updateInvTotal() {
+  const qtyEls = document.querySelectorAll('.inv-qty');
+  const priceEls = document.querySelectorAll('.inv-price');
+  let total = 0;
+  for (let i = 0; i < qtyEls.length; i++) {
+    const q = parseFloat(qtyEls[i].value) || 0;
+    const p = parseFloat(priceEls[i].value) || 0;
+    total += q * p;
+  }
+  const totalEl = document.getElementById('inv_total');
+  if (totalEl) totalEl.textContent = 'KES ' + total.toLocaleString();
+}
+
+async function saveInvoice(status) {
+  const inp = document.getElementById('inv_patient');
+  const patientId = inp.dataset.patientId;
+  if (!patientId) return toast('Select a patient', 'error');
+
+  const rows = [...document.querySelectorAll('#inv_items > div')];
+  const items = rows.map(r => {
+    const desc = r.querySelector('.inv-desc').value.trim();
+    const qty = parseFloat(r.querySelector('.inv-qty').value) || 0;
+    const price = parseFloat(r.querySelector('.inv-price').value) || 0;
+    if (!desc || qty <= 0) return null;
+    return { desc, qty, price, lineTotal: qty * price };
+  }).filter(Boolean);
+  if (!items.length) return toast('Add at least one line item', 'error');
+
+  const total = items.reduce((s,i) => s + i.lineTotal, 0);
+  const p = CACHE.patients.find(x => x.id === patientId);
+  const number = status === 'issued' ? await nextInvoiceNumber() : '';
+
+  await db.collection('invoices').add({
+    number,
+    patientId,
+    patientName: p ? patientName(p) : inp.value.trim(),
+    date: document.getElementById('inv_date').value,
+    dueDate: document.getElementById('inv_due').value,
+    notes: document.getElementById('inv_notes').value.trim(),
+    items,
+    total,
+    paid: 0,
+    status,
+    createdBy: CURRENT_USER.uid,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+    issuedAt: status === 'issued' ? firebase.firestore.FieldValue.serverTimestamp() : null,
+    issuedBy: status === 'issued' ? CURRENT_USER.uid : null
+  });
+
+  toast('Invoice saved', 'success');
+  closeModal();
+  renderView('invoices');
+}
+
+async function invoiceView(id) {
+  const doc = await db.collection('invoices').doc(id).get();
+  if (!doc.exists) return toast('Invoice not found', 'error');
+  const inv = { id, ...doc.data() };
+  const p = CACHE.patients.find(x => x.id === inv.patientId);
+  const bal = Math.max(0, (inv.total||0) - (inv.paid||0));
+
+  const statusColor = inv.status === 'paid' ? 'bg-green-100 text-green-700' :
+                      inv.status === 'partial' ? 'bg-yellow-100 text-yellow-700' :
+                      inv.status === 'issued' ? 'bg-blue-100 text-blue-700' :
+                      inv.status === 'overdue' ? 'bg-red-100 text-red-700' :
+                      inv.status === 'cancelled' ? 'bg-gray-200 text-gray-700' :
+                      'bg-gray-100 text-gray-600';
+
+  openModal(`
+    <div class="flex justify-between items-start mb-3">
+      <div>
+        <h3 class="text-xl font-bold">${inv.number ? 'Invoice '+esc(inv.number) : 'Draft Invoice'}</h3>
+        <span class="badge ${statusColor}">${esc(inv.status||'draft')}</span>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="invoicePrint('${id}')" class="btn btn-secondary text-sm">🖨 Print</button>
+        <button onclick="closeModal()" class="btn btn-secondary text-sm">Close</button>
+      </div>
+    </div>
+
+    <div class="card p-3 mb-3 text-sm">
+      <div><b>Patient:</b> ${esc(p ? patientName(p) : inv.patientName||'—')}</div>
+      <div><b>Date:</b> ${esc(inv.date||'')} ${inv.dueDate ? `&nbsp;·&nbsp;<b>Due:</b> ${esc(inv.dueDate)}` : ''}</div>
+    </div>
+
+    <table class="mb-3"><thead><tr><th>Description</th><th>Qty</th><th>Unit</th><th>Total</th></tr></thead><tbody>
+      ${(inv.items||[]).map(i => `<tr>
+        <td>${esc(i.desc)}</td>
+        <td>${i.qty}</td>
+        <td>${(i.price||0).toLocaleString()}</td>
+        <td><b>${(i.lineTotal||0).toLocaleString()}</b></td>
+      </tr>`).join('')}
+    </tbody></table>
+
+    <div class="bg-gray-50 p-3 rounded mb-3 text-sm">
+      <div class="flex justify-between"><span>Total:</span><b>KES ${(inv.total||0).toLocaleString()}</b></div>
+      <div class="flex justify-between"><span>Paid:</span><span>KES ${(inv.paid||0).toLocaleString()}</span></div>
+      <div class="flex justify-between"><span>Balance:</span><b class="text-red-600">KES ${bal.toLocaleString()}</b></div>
+    </div>
+
+    ${inv.notes ? `<div class="text-sm text-gray-600 mb-3"><b>Notes:</b> ${esc(inv.notes)}</div>` : ''}
+
+    <div class="flex flex-wrap gap-2 justify-end">
+      ${inv.status === 'draft' ? `
+        <button onclick="invoiceIssue('${id}')" class="btn btn-primary">Issue Invoice</button>
+      ` : ''}
+      ${(inv.status === 'issued' || inv.status === 'partial') ? `
+        <button onclick="invoiceRecordPayment('${id}')" class="btn btn-primary">Record Payment</button>
+        <button onclick="invoiceCancel('${id}')" class="btn btn-secondary">Cancel Invoice</button>
+      ` : ''}
+    </div>
+  `, 'max-w-3xl');
+}
+
+async function invoiceIssue(id) {
+  const doc = await db.collection('invoices').doc(id).get();
+  if (!doc.exists) return toast('Not found', 'error');
+  const inv = doc.data();
+  if (inv.number) return toast('Already issued', 'error');
+  const number = await nextInvoiceNumber();
+  await db.collection('invoices').doc(id).update({
+    number,
+    status: 'issued',
+    issuedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    issuedBy: CURRENT_USER.uid
+  });
+  toast('Issued ' + number, 'success');
+  invoiceView(id);
+}
+
+async function invoiceCancel(id) {
+  if (!confirm('Cancel this invoice? It will remain in the system but marked cancelled.')) return;
+  await db.collection('invoices').doc(id).update({
+    status: 'cancelled',
+    cancelledAt: firebase.firestore.FieldValue.serverTimestamp(),
+    cancelledBy: CURRENT_USER.uid
+  });
+  toast('Cancelled', 'info');
+  invoiceView(id);
+}
+
+async function invoiceRecordPayment(id) {
+  const doc = await db.collection('invoices').doc(id).get();
+  if (!doc.exists) return toast('Not found', 'error');
+  const inv = doc.data();
+  const bal = Math.max(0, (inv.total||0) - (inv.paid||0));
+  if (bal <= 0) return toast('Already fully paid', 'info');
+
+  openModal(`
+    <h3 class="text-xl font-bold mb-3">Record Payment for ${esc(inv.number||'invoice')}</h3>
+    <div class="bg-gray-50 p-3 rounded mb-3 text-sm">
+      <div><b>Total:</b> KES ${(inv.total||0).toLocaleString()}</div>
+      <div><b>Already paid:</b> KES ${(inv.paid||0).toLocaleString()}</div>
+      <div><b>Balance:</b> <span class="text-red-600">KES ${bal.toLocaleString()}</span></div>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3">
+      <div><label class="label">Amount to pay *</label><input id="ipay_amount" type="number" class="input" value="${bal}"></div>
+      <div><label class="label">Mode *</label>
+        <select id="ipay_mode" class="input" onchange="ipayModeChange()">
+          ${PAYMENT_MODES.map(m => `<option>${m}</option>`).join('')}
+        </select>
+      </div>
+      <div id="ipay_mpesa_wrap" class="hidden col-span-2"><label class="label">Mpesa Code</label><input id="ipay_mpesa" class="input" placeholder="e.g. QBC123XYZ"></div>
+      <div id="ipay_sha_wrap" class="hidden col-span-2 grid grid-cols-2 gap-3">
+        <div><label class="label">SHA Member No.</label><input id="ipay_sha_member" class="input"></div>
+        <div><label class="label">SHA Claim Ref</label><input id="ipay_sha_ref" class="input"></div>
+      </div>
+      <div class="col-span-2"><label class="label">Notes</label><input id="ipay_notes" class="input"></div>
+    </div>
+
+    <div class="flex justify-end gap-2 mt-4">
+      <button onclick="closeModal()" class="btn btn-secondary">Cancel</button>
+      <button onclick="invoicePaymentConfirm('${id}')" class="btn btn-primary">Record Payment</button>
+    </div>
+  `, 'max-w-xl');
+  ipayModeChange();
+}
+
+function ipayModeChange() {
+  const m = document.getElementById('ipay_mode').value;
+  document.getElementById('ipay_mpesa_wrap').classList.toggle('hidden', m !== 'Mpesa');
+  document.getElementById('ipay_sha_wrap').classList.toggle('hidden', m !== 'SHA');
+}
+
+async function invoicePaymentConfirm(invoiceId) {
+  const invDoc = await db.collection('invoices').doc(invoiceId).get();
+  if (!invDoc.exists) return toast('Invoice not found', 'error');
+  const inv = invDoc.data();
+
+  const amount = parseFloat(document.getElementById('ipay_amount').value) || 0;
+  if (amount <= 0) return toast('Enter an amount', 'error');
+  const mode = document.getElementById('ipay_mode').value;
+
+  // record into payments collection (unified with the rest of the app)
+  const p = CACHE.patients.find(x => x.id === inv.patientId);
+  const receiptNo = 'R' + Date.now().toString().slice(-8);
+  const visit = await getOrCreateTodayVisit(inv.patientId);
+
+  await db.collection('payments').add({
+    patientId: inv.patientId,
+    visitId: visit.id,
+    date: todayStr(),
+    items: (inv.items||[]).map(i => ({ desc: i.desc, amount: i.lineTotal })),
+    amount,
+    mode,
+    receipt: receiptNo,
+    invoiceId,
+    invoiceNumber: inv.number || '',
+    mpesaCode: document.getElementById('ipay_mpesa')?.value.trim() || '',
+    shaMember: document.getElementById('ipay_sha_member')?.value.trim() || '',
+    shaRef: document.getElementById('ipay_sha_ref')?.value.trim() || '',
+    notes: document.getElementById('ipay_notes').value.trim(),
+    receivedBy: CURRENT_USER.uid,
+    receivedByName: CURRENT_USER.name || CURRENT_USER.email,
+    createdAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+
+  // update invoice paid amount + status
+  const newPaid = (inv.paid||0) + amount;
+  const newStatus = newPaid >= (inv.total||0) ? 'paid' : 'partial';
+  await db.collection('invoices').doc(invoiceId).update({
+    paid: newPaid,
+    status: newStatus,
+    lastPaymentAt: firebase.firestore.FieldValue.serverTimestamp()
+  });
+
+  toast('Payment recorded', 'success');
+  closeModal();
+  renderView('invoices');
+}
+
+async function invoicePrint(id) {
+  const doc = await db.collection('invoices').doc(id).get();
+  if (!doc.exists) return toast('Not found', 'error');
+  const inv = doc.data();
+  const p = CACHE.patients.find(x => x.id === inv.patientId);
+  const bal = Math.max(0, (inv.total||0) - (inv.paid||0));
+
+  openModal(`
+    <div class="flex justify-between mb-3">
+      <h3 class="text-xl font-bold">Invoice</h3>
+      <div><button onclick="window.print()" class="btn btn-primary text-sm">🖨 Print</button>
+      <button onclick="closeModal()" class="btn btn-secondary text-sm">Close</button></div>
+    </div>
+
+    <div id="printArea" style="font-family:system-ui;padding:2rem;max-width:800px;margin:auto">
+      <div style="text-align:center;border-bottom:2px solid #333;padding-bottom:.5rem;margin-bottom:1rem">
+        <img src="logo.png" alt="Logo" style="max-width:150px;max-height:60px;margin-bottom:.3rem">
+        <h1 style="margin:0;font-size:20px">StraightUpMedical</h1>
+      </div>
+
+      <table style="width:100%;border:none;margin:1rem 0;font-size:14px">
+        <tr>
+          <td style="border:none;padding:4px"><b>Invoice #:</b> ${esc(inv.number||'DRAFT')}</td>
+          <td style="border:none;padding:4px;text-align:right"><b>Date:</b> ${esc(inv.date||'')}</td>
+        </tr>
+        <tr>
+          <td style="border:none;padding:4px"><b>Patient:</b> ${esc(p ? patientName(p) : inv.patientName||'—')}</td>
+          <td style="border:none;padding:4px;text-align:right"><b>Due:</b> ${esc(inv.dueDate||'')}</td>
+        </tr>
+        ${p ? `<tr>
+          <td style="border:none;padding:4px"><b>Patient No:</b> ${esc(p.number||'')}</td>
+          <td style="border:none;padding:4px;text-align:right"><b>Phone:</b> ${esc(p.phone||'')}</td>
+        </tr>` : ''}
+      </table>
+
+      <table style="width:100%;border-collapse:collapse;margin:1rem 0">
+        <thead>
+          <tr style="background:#f0f0f0">
+            <th style="text-align:left;padding:6px;border-bottom:1px solid #ccc">Description</th>
+            <th style="text-align:right;padding:6px;border-bottom:1px solid #ccc">Qty</th>
+            <th style="text-align:right;padding:6px;border-bottom:1px solid #ccc">Unit</th>
+            <th style="text-align:right;padding:6px;border-bottom:1px solid #ccc">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${(inv.items||[]).map(i => `<tr>
+            <td style="padding:6px;border-bottom:1px solid #eee">${esc(i.desc)}</td>
+            <td style="text-align:right;padding:6px;border-bottom:1px solid #eee">${i.qty}</td>
+            <td style="text-align:right;padding:6px;border-bottom:1px solid #eee">${(i.price||0).toLocaleString()}</td>
+            <td style="text-align:right;padding:6px;border-bottom:1px solid #eee"><b>${(i.lineTotal||0).toLocaleString()}</b></td>
+          </tr>`).join('')}
+        </tbody>
+      </table>
+
+      <table style="width:100%;border:none;margin-top:1rem;font-size:14px">
+        <tr><td style="border:none;text-align:right;padding:3px">Total:</td><td style="border:none;text-align:right;padding:3px;width:140px"><b>KES ${(inv.total||0).toLocaleString()}</b></td></tr>
+        <tr><td style="border:none;text-align:right;padding:3px">Paid:</td><td style="border:none;text-align:right;padding:3px">KES ${(inv.paid||0).toLocaleString()}</td></tr>
+        <tr><td style="border:none;text-align:right;padding:3px"><b>Balance Due:</b></td><td style="border:none;text-align:right;padding:3px"><b>KES ${bal.toLocaleString()}</b></td></tr>
+      </table>
+
+      ${inv.notes ? `<p style="margin-top:1.5rem;font-size:13px"><b>Notes:</b> ${esc(inv.notes)}</p>` : ''}
+
+      <p style="margin-top:3rem;font-size:12px;color:#666;text-align:center">
+        Thank you. Please retain this invoice for your records.
+      </p>
+    </div>
+  `, 'max-w-3xl');
+}
 // ============================================================
 // ADMIN MODULE
 // ============================================================
