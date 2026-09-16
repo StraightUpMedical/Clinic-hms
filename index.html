@@ -1002,6 +1002,153 @@ function flagLabResult(test, resultValue) {
   // 3) No rule → no flag
   return { flag: '', color: '' };
 }
+  // ============================================================
+// SEED STANDARD KENYAN CLINIC LAB CATALOG
+// ============================================================
+async function seedStandardLabCatalog() {
+  if (!confirm('Load ~85 standard lab tests with reference ranges?\n\nExisting tests with the same name will NOT be overwritten.')) return;
+
+  const catalog = [
+    // ---- HEMATOLOGY ----
+    { name: 'Haemoglobin (Hb)', category: 'Hematology', price: 150, unit: 'g/dL', range: '12-17' },
+    { name: 'WBC', category: 'Hematology', price: 150, unit: 'x10⁹/L', range: '4-11' },
+    { name: 'Platelets', category: 'Hematology', price: 150, unit: 'x10⁹/L', range: '150-450' },
+    { name: 'Haematocrit (Hct)', category: 'Hematology', price: 100, unit: '%', range: '36-50' },
+    { name: 'MCV', category: 'Hematology', price: 100, unit: 'fL', range: '80-100' },
+    { name: 'MCH', category: 'Hematology', price: 100, unit: 'pg', range: '27-33' },
+    { name: 'MCHC', category: 'Hematology', price: 100, unit: 'g/dL', range: '32-36' },
+    { name: 'Lymphocytes', category: 'Hematology', price: 100, unit: '%', range: '20-45' },
+    { name: 'Neutrophils', category: 'Hematology', price: 100, unit: '%', range: '40-75' },
+    { name: 'Eosinophils', category: 'Hematology', price: 100, unit: '%', range: '0-6' },
+    { name: 'Monocytes', category: 'Hematology', price: 100, unit: '%', range: '2-10' },
+    { name: 'ESR', category: 'Hematology', price: 150, unit: 'mm/hr', range: '0-20' },
+    { name: 'Blood Group', category: 'Hematology', price: 200, unit: '', normalText: '' },
+    { name: 'Reticulocyte Count', category: 'Hematology', price: 300, unit: '%', range: '0.5-2.5' },
+    { name: 'Peripheral Blood Film', category: 'Hematology', price: 400, unit: '', normalText: 'Normal' },
+
+    // ---- CHEMISTRY ----
+    { name: 'Random Blood Sugar (RBS)', category: 'Chemistry', price: 100, unit: 'mmol/L', range: '3.9-7.8' },
+    { name: 'Fasting Blood Sugar (FBS)', category: 'Chemistry', price: 120, unit: 'mmol/L', range: '3.9-5.6' },
+    { name: 'HbA1c', category: 'Chemistry', price: 1200, unit: '%', range: '4-5.7' },
+    { name: 'Urea', category: 'Chemistry', price: 250, unit: 'mmol/L', range: '2.5-7.1' },
+    { name: 'Creatinine', category: 'Chemistry', price: 250, unit: 'µmol/L', range: '60-110' },
+    { name: 'Sodium (Na+)', category: 'Chemistry', price: 200, unit: 'mmol/L', range: '135-145' },
+    { name: 'Potassium (K+)', category: 'Chemistry', price: 200, unit: 'mmol/L', range: '3.5-5.1' },
+    { name: 'Chloride (Cl-)', category: 'Chemistry', price: 200, unit: 'mmol/L', range: '98-107' },
+    { name: 'Total Calcium', category: 'Chemistry', price: 250, unit: 'mmol/L', range: '2.1-2.6' },
+    { name: 'Uric Acid', category: 'Chemistry', price: 300, unit: 'µmol/L', range: '150-420' },
+    { name: 'Total Cholesterol', category: 'Chemistry', price: 350, unit: 'mmol/L', range: '0-5.2' },
+    { name: 'LDL Cholesterol', category: 'Chemistry', price: 350, unit: 'mmol/L', range: '0-3.4' },
+    { name: 'HDL Cholesterol', category: 'Chemistry', price: 350, unit: 'mmol/L', range: '1.0-2.0' },
+    { name: 'Triglycerides', category: 'Chemistry', price: 350, unit: 'mmol/L', range: '0-1.7' },
+    { name: 'Total Protein', category: 'Chemistry', price: 250, unit: 'g/L', range: '64-83' },
+    { name: 'Albumin', category: 'Chemistry', price: 250, unit: 'g/L', range: '35-50' },
+    { name: 'ALT', category: 'Chemistry', price: 300, unit: 'U/L', range: '0-40' },
+    { name: 'AST', category: 'Chemistry', price: 300, unit: 'U/L', range: '0-40' },
+    { name: 'ALP', category: 'Chemistry', price: 300, unit: 'U/L', range: '30-130' },
+    { name: 'GGT', category: 'Chemistry', price: 350, unit: 'U/L', range: '0-50' },
+    { name: 'Total Bilirubin', category: 'Chemistry', price: 300, unit: 'µmol/L', range: '0-20' },
+    { name: 'Direct Bilirubin', category: 'Chemistry', price: 300, unit: 'µmol/L', range: '0-5' },
+    { name: 'Amylase', category: 'Chemistry', price: 400, unit: 'U/L', range: '25-125' },
+    { name: 'CK-MB', category: 'Chemistry', price: 900, unit: 'ng/mL', range: '0-5' },
+    { name: 'Troponin I', category: 'Chemistry', price: 1500, unit: 'ng/mL', range: '0-0.04' },
+
+    // ---- HORMONES ----
+    { name: 'TSH', category: 'Hormones', price: 900, unit: 'mIU/L', range: '0.4-4.0' },
+    { name: 'Free T3', category: 'Hormones', price: 900, unit: 'pmol/L', range: '3.1-6.8' },
+    { name: 'Free T4', category: 'Hormones', price: 900, unit: 'pmol/L', range: '12-22' },
+    { name: 'Prolactin', category: 'Hormones', price: 1500, unit: 'ng/mL', range: '4-23' },
+    { name: 'Beta HCG (quantitative)', category: 'Hormones', price: 1200, unit: 'mIU/mL', range: '0-5' },
+    { name: 'Progesterone', category: 'Hormones', price: 1500, unit: 'ng/mL', range: '0-25' },
+    { name: 'Testosterone', category: 'Hormones', price: 1800, unit: 'ng/dL', range: '300-1000' },
+
+    // ---- TUMOR MARKERS ----
+    { name: 'PSA (Total)', category: 'Tumor Markers', price: 1500, unit: 'ng/mL', range: '0-4' },
+    { name: 'CEA', category: 'Tumor Markers', price: 1800, unit: 'ng/mL', range: '0-3' },
+    { name: 'AFP', category: 'Tumor Markers', price: 1800, unit: 'ng/mL', range: '0-10' },
+    { name: 'CA-125', category: 'Tumor Markers', price: 2200, unit: 'U/mL', range: '0-35' },
+
+    // ---- MICROBIOLOGY / PARASITOLOGY ----
+    { name: 'Malaria RDT', category: 'Parasitology', price: 200, unit: '', normalText: 'Negative' },
+    { name: 'Malaria Microscopy (BS for MP)', category: 'Parasitology', price: 300, unit: '', normalText: 'No parasites seen' },
+    { name: 'Stool Ova & Cysts', category: 'Parasitology', price: 300, unit: '', normalText: 'No ova or cysts seen' },
+    { name: 'Stool Occult Blood', category: 'Parasitology', price: 300, unit: '', normalText: 'Negative' },
+    { name: 'Urine Culture & Sensitivity', category: 'Microbiology', price: 1200, unit: '', normalText: 'No growth' },
+    { name: 'Blood Culture', category: 'Microbiology', price: 1800, unit: '', normalText: 'No growth' },
+    { name: 'Stool Culture', category: 'Microbiology', price: 1500, unit: '', normalText: 'No growth' },
+    { name: 'Throat Swab Culture', category: 'Microbiology', price: 1500, unit: '', normalText: 'No growth' },
+    { name: 'Wound Swab C&S', category: 'Microbiology', price: 1500, unit: '', normalText: 'No growth' },
+    { name: 'High Vaginal Swab (HVS)', category: 'Microbiology', price: 800, unit: '', normalText: 'Normal flora' },
+    { name: 'Sputum AFB (Ziehl-Neelsen)', category: 'Microbiology', price: 500, unit: '', normalText: 'No AFB seen' },
+    { name: 'GeneXpert (TB PCR)', category: 'Microbiology', price: 3500, unit: '', normalText: 'MTB not detected' },
+    { name: 'Gram Stain', category: 'Microbiology', price: 500, unit: '', normalText: 'No organisms seen' },
+
+    // ---- SEROLOGY ----
+    { name: 'HIV Rapid Test', category: 'Serology', price: 300, unit: '', normalText: 'Non-reactive' },
+    { name: 'Hepatitis B Surface Antigen (HBsAg)', category: 'Serology', price: 500, unit: '', normalText: 'Negative' },
+    { name: 'Hepatitis C Antibody', category: 'Serology', price: 800, unit: '', normalText: 'Negative' },
+    { name: 'VDRL / RPR', category: 'Serology', price: 300, unit: '', normalText: 'Non-reactive' },
+    { name: 'Widal Test', category: 'Serology', price: 500, unit: 'Titre', range: '0-80' },
+    { name: 'Brucella Agglutination', category: 'Serology', price: 800, unit: 'Titre', range: '0-80' },
+    { name: 'Rheumatoid Factor (RF)', category: 'Serology', price: 900, unit: 'IU/mL', range: '0-20' },
+    { name: 'CRP', category: 'Serology', price: 700, unit: 'mg/L', range: '0-5' },
+    { name: 'Typhoid IgM (Rapid)', category: 'Serology', price: 600, unit: '', normalText: 'Negative' },
+    { name: 'Dengue NS1 Antigen', category: 'Serology', price: 1200, unit: '', normalText: 'Negative' },
+
+    // ---- URINALYSIS ----
+    { name: 'Urinalysis — Protein', category: 'Urinalysis', price: 80, unit: '', normalText: 'Negative' },
+    { name: 'Urinalysis — Glucose', category: 'Urinalysis', price: 80, unit: '', normalText: 'Negative' },
+    { name: 'Urinalysis — Ketones', category: 'Urinalysis', price: 80, unit: '', normalText: 'Negative' },
+    { name: 'Urinalysis — Blood', category: 'Urinalysis', price: 80, unit: '', normalText: 'Negative' },
+    { name: 'Urinalysis — Nitrites', category: 'Urinalysis', price: 80, unit: '', normalText: 'Negative' },
+    { name: 'Urinalysis — Leucocytes', category: 'Urinalysis', price: 80, unit: '', normalText: 'Negative' },
+    { name: 'Urinalysis — pH', category: 'Urinalysis', price: 80, unit: '', range: '4.5-8.0' },
+    { name: 'Urinalysis — Specific Gravity', category: 'Urinalysis', price: 80, unit: '', range: '1.005-1.030' },
+    { name: 'Urinalysis — Pus Cells', category: 'Urinalysis', price: 80, unit: '/hpf', range: '0-5' },
+    { name: 'Urinalysis — RBC', category: 'Urinalysis', price: 80, unit: '/hpf', range: '0-2' },
+    { name: 'Urinalysis — Epithelial Cells', category: 'Urinalysis', price: 80, unit: '/hpf', range: '0-5' },
+
+    // ---- PREGNANCY ----
+    { name: 'Pregnancy Test (Urine HCG)', category: 'Pregnancy', price: 200, unit: '', normalText: 'Negative' },
+    { name: 'Pregnancy Test (Blood HCG)', category: 'Pregnancy', price: 500, unit: 'mIU/mL', range: '0-5' }
+  ];
+
+  // Check existing
+  const snap = await db.collection('labTests').get();
+  const existingNames = new Set(snap.docs.map(d => (d.data().name || '').toLowerCase().trim()));
+
+  let created = 0, skipped = 0;
+  const batch = db.batch();
+  let batchCount = 0;
+
+  for (const t of catalog) {
+    const key = t.name.toLowerCase().trim();
+    if (existingNames.has(key)) { skipped++; continue; }
+    const ref = db.collection('labTests').doc();
+    batch.set(ref, {
+      name: t.name,
+      category: t.category,
+      price: t.price || 0,
+      unit: t.unit || '',
+      range: t.range || '',
+      normalText: t.normalText || '',
+      createdAt: firebase.firestore.FieldValue.serverTimestamp()
+    });
+    batchCount++;
+    created++;
+    // Firestore batch limit is 500; flush every 400 just in case
+    if (batchCount === 400) {
+      await batch.commit();
+      batchCount = 0;
+    }
+  }
+
+  if (batchCount > 0) await batch.commit();
+
+  await loadCache();
+  toast(`${created} tests added, ${skipped} skipped (already existed)`, 'success');
+  if (typeof manageLabCatalog === 'function') manageLabCatalog();
+}
 // ============================================================
 // LABORATORY MODULE
 // ============================================================
@@ -1252,6 +1399,7 @@ async function manageLabCatalog() {
       <input id="lc_normal" class="input col-span-1" placeholder="Normal">
       <button onclick="addLabTest()" class="btn btn-primary col-span-1">Add</button>
     </div>
+   
 
     <div class="max-h-96 overflow-y-auto">
     <table><thead><tr>
