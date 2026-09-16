@@ -879,11 +879,9 @@ async function saveConsultation() {
 function printElement(selectorOrHtml) {
   const helper = document.getElementById('printHelper');
   let html = '';
-  if (typeof selectorOrHtml === 'string' && selectorOrHtml.startsWith('<')) {
-    // raw HTML passed in
+  if (typeof selectorOrHtml === 'string' && selectorOrHtml.trim().startsWith('<')) {
     html = selectorOrHtml;
   } else if (typeof selectorOrHtml === 'string') {
-    // CSS selector
     const el = document.querySelector(selectorOrHtml);
     if (!el) { toast('Nothing to print', 'error'); return; }
     html = el.innerHTML;
@@ -891,15 +889,48 @@ function printElement(selectorOrHtml) {
     html = selectorOrHtml.innerHTML;
   }
   if (!html) { toast('Nothing to print', 'error'); return; }
+
+  // Fill the helper
   helper.innerHTML = html;
   helper.style.display = 'block';
-  setTimeout(() => {
-    window.print();
+
+  // Wait for any images in the helper to finish loading, then print
+  const imgs = helper.querySelectorAll('img');
+  let loaded = 0;
+  const total = imgs.length;
+
+  const triggerPrint = () => {
+    // Small delay to let the browser paint
     setTimeout(() => {
-      helper.style.display = 'none';
-      helper.innerHTML = '';
-    }, 200);
-  }, 100);
+      window.print();
+      // Restore helper after print dialog closes
+      setTimeout(() => {
+        helper.style.display = 'none';
+        helper.innerHTML = '';
+      }, 500);
+    }, 150);
+  };
+
+  if (total === 0) {
+    triggerPrint();
+    return;
+  }
+
+  imgs.forEach(img => {
+    if (img.complete) {
+      loaded++;
+      if (loaded === total) triggerPrint();
+    } else {
+      img.onload = () => {
+        loaded++;
+        if (loaded === total) triggerPrint();
+      };
+      img.onerror = () => {
+        loaded++;
+        if (loaded === total) triggerPrint();
+      };
+    }
+  });
 }
 // ============================================================
 // LABORATORY MODULE
