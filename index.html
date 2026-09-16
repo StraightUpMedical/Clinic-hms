@@ -3432,11 +3432,11 @@ async function dispenseModal(rxId) {
       </div>
     ` : ''}
 
-    <table class="mb-3"><thead><tr><th>Drug</th><th>Qty</th><th>Sig</th><th>In stock</th></tr></thead><tbody>
+        <table class="mb-3"><thead><tr><th>Drug</th><th>Qty</th><th>Sig</th><th>In stock</th></tr></thead><tbody>
       ${(r.items||[]).map(i => {
         const d = CACHE.drugs.find(x => x.id === i.drugId);
         return `<tr><td>${esc(i.name)}</td><td>${i.qty}</td><td>${esc(i.sig||'')}</td>
-        <td>${d ? computeStock(d) : '—'}</td>  
+        <td>${d ? computeStock(d) : '—'}</td></tr>`;
       }).join('')}
     </tbody></table>
 
