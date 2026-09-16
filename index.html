@@ -193,7 +193,7 @@ async function loadCache() {
       db.collection('patients').orderBy('createdAt', 'desc').limit(500).get(),
       db.collection('drugs').orderBy('name').get(),
       db.collection('labTests').orderBy('name').get(),
-      db.collection('radiologyTests').orderBy('name').get()
+      db.collection('radiologyTests').orderBy('name').get(),
       db.collection('rxTemplates').orderBy('name').get()
     ]);
     CACHE.patients = pSnap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -203,7 +203,6 @@ async function loadCache() {
     CACHE.rxTemplates = tSnap.docs.map(d => ({ id: d.id, ...d.data() }));
   } catch (e) { console.error('Cache load error:', e); }
 }
-
 async function refreshPatients() {
   const snap = await db.collection('patients').orderBy('createdAt', 'desc').limit(500).get();
   CACHE.patients = snap.docs.map(d => ({ id: d.id, ...d.data() }));
