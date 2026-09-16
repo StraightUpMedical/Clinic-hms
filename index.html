@@ -3808,7 +3808,7 @@ async function viewReports(c) {
       <button onclick="printReportCurrent()" class="btn btn-primary text-sm">🖨 Print</button>
     </div>
     <div class="bg-white border-b mb-4 flex gap-1 overflow-x-auto">
-      ${['daily','weekly','monthly','balances'].map(t => `
+      ${['daily','weekly','monthly','balances','dayend'].map(t => `
         <button onclick="reportTab('${t}')" class="px-4 py-2 text-sm whitespace-nowrap ${REPORT_TAB===t?'tab-active':''}" id="rtab_${t}">
           ${t.charAt(0).toUpperCase()+t.slice(1)}
         </button>
@@ -3818,6 +3818,7 @@ async function viewReports(c) {
   if (REPORT_TAB === 'daily')    await renderReportDaily();
   else if (REPORT_TAB === 'weekly')  await renderReportRange(7);
   else if (REPORT_TAB === 'monthly') await renderReportRange(30);
+    else if (REPORT_TAB === 'dayend') await renderDayEnd();
   else if (REPORT_TAB === 'balances') await renderBalances();
 }
 
@@ -4074,7 +4075,171 @@ async function renderBalances() {
       </tbody></table>
     </div>` : '<p class="text-gray-400">No payment activity in last 30 days.</p>'}`;
 }
+// ============================================================
+// DAY-END CASH-UP
+// ============================================================
+let DAYEND_DATE = new Date().toISOString().slice(0,10);
 
+async function renderDayEnd() {
+  const d = DAYEND_DATE;
+  const [paysSnap, visitsSnap] = await Promise.all([
+    db.collection('payments').where('date','==',d).get(),
+    db.collection('visits').where('date','==',d).get()
+  ]);
+  const pays = paysSnap.docs.map(x => ({ id: x.id, ...x.data() }))
+    .sort((a,b) => {
+      const ta = a.createdAt?.toDate ? a.createdAt.toDate() : new Date(a.createdAt || 0);
+      const tb = b.createdAt?.toDate ? b.createdAt.toDate() : new Date(b.createdAt || 0);
+      return ta - tb;
+    });
+  const visits = visitsSnap.docs.map(x => x.data());
+
+  const byMode = {};
+  const countMode = {};
+  let total = 0;
+  pays.forEach(p => {
+    const m = p.mode || 'Unknown';
+    byMode[m] = (byMode[m]||0) + (p.amount||0);
+    countMode[m] = (countMode[m]||0) + 1;
+    total += (p.amount||0);
+  });
+
+  const yesterday = new Date(d); yesterday.setDate(yesterday.getDate()-1);
+  const tomorrow = new Date(d); tomorrow.setDate(tomorrow.getDate()+1);
+
+  document.getElementById('reportBody').innerHTML = `
+    <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
+      <div class="flex gap-2">
+        <button onclick="dayEndJump('${yesterday.toISOString().slice(0,10)}')" class="btn btn-secondary text-sm">← Prev</button>
+        <button onclick="dayEndJump('${todayStr()}')" class="btn btn-secondary text-sm">Today</button>
+        <button onclick="dayEndJump('${tomorrow.toISOString().slice(0,10)}')" class="btn btn-secondary text-sm">Next →</button>
+      </div>
+      <div class="flex gap-2">
+        <input type="date" class="input" style="width:auto" value="${d}" onchange="dayEndJump(this.value)">
+        <button onclick="printDayEnd()" class="btn btn-primary text-sm">🖨 Print</button>
+        <button onclick="shareDayEndWhatsApp()" class="btn btn-primary text-sm" style="background:#25D366">📱 WhatsApp</button>
+      </div>
+    </div>
+
+    <div id="dayEndBody">
+      <div class="text-center mb-4">
+        <img src="logo.png" alt="Logo" style="max-width:130px;margin:0 auto .3rem auto;display:block">
+        <h1 class="text-2xl font-bold">StraightUpMedical</h1>
+        <p class="text-sm text-gray-500">Day-End Cash-Up Report — ${esc(d)}</p>
+      </div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div class="card p-3"><div class="text-xs text-gray-500">Total Collected</div><div class="text-2xl font-bold">KES ${total.toLocaleString()}</div></div>
+        <div class="card p-3"><div class="text-xs text-gray-500">Transactions</div><div class="text-2xl font-bold">${pays.length}</div></div>
+        <div class="card p-3"><div class="text-xs text-gray-500">Patients Seen</div><div class="text-2xl font-bold">${visits.length}</div></div>
+        <div class="card p-3"><div class="text-xs text-gray-500">Cash on Hand (expected)</div><div class="text-2xl font-bold">KES ${(byMode['Cash']||0).toLocaleString()}</div></div>
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Breakdown by Payment Mode</h3>
+        ${Object.keys(byMode).length ? `<table><thead><tr>
+          <th>Mode</th><th>Count</th><th>Amount (KES)</th>
+        </tr></thead><tbody>
+          ${Object.entries(byMode).sort((a,b)=>b[1]-a[1]).map(([m,a]) => `<tr>
+            <td>${esc(m)}</td><td>${countMode[m]}</td><td><b>${a.toLocaleString()}</b></td>
+          </tr>`).join('')}
+          <tr style="background:#f9fafb"><td><b>TOTAL</b></td><td><b>${pays.length}</b></td><td><b>${total.toLocaleString()}</b></td></tr>
+        </tbody></table>` : '<p class="text-gray-400">No payments recorded for this day.</p>'}
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Transaction Log (${pays.length})</h3>
+        ${pays.length ? `<table><thead><tr>
+          <th>Time</th><th>Patient</th><th>Mode</th><th>Ref</th><th>Amount</th>
+        </tr></thead><tbody>
+          ${pays.map(p => {
+            const pt = CACHE.patients.find(x => x.id === p.patientId);
+            const time = p.createdAt?.toDate ? p.createdAt.toDate().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'}) : '';
+            return `<tr>
+              <td>${esc(time)}</td>
+              <td>${esc(pt ? patientName(pt) : p.patientName || '—')}</td>
+              <td>${esc(p.mode || '')}</td>
+              <td class="text-xs text-gray-600">${esc(p.mpesaCode || p.shaRef || p.receipt || '')}</td>
+              <td>KES ${(p.amount||0).toLocaleString()}</td>
+            </tr>`;
+          }).join('')}
+          <tr style="background:#f9fafb"><td colspan="4"><b>Total</b></td><td><b>KES ${total.toLocaleString()}</b></td></tr>
+        </tbody></table>` : '<p class="text-gray-400">No transactions.</p>'}
+      </div>
+
+      <div class="card p-4 mb-4">
+        <h3 class="font-semibold mb-2">Cash Reconciliation</h3>
+        <table><tbody>
+          <tr><td>Expected cash on hand</td><td align="right"><b>KES ${(byMode['Cash']||0).toLocaleString()}</b></td></tr>
+          <tr><td>Actual cash counted</td><td align="right">KES ______________</td></tr>
+          <tr><td>Variance</td><td align="right">KES ______________</td></tr>
+          <tr><td colspan="2" style="padding-top:1.5rem">
+            <div><b>Cashier signature:</b> ____________________   <b>Date:</b> ______________</div>
+            <div style="margin-top:1rem"><b>Supervisor signature:</b> ____________________   <b>Date:</b> ______________</div>
+          </td></tr>
+        </tbody></table>
+      </div>
+    </div>
+  `;
+}
+
+function dayEndJump(d) {
+  DAYEND_DATE = d;
+  renderDayEnd();
+}
+
+function printDayEnd() {
+  const el = document.getElementById('dayEndBody');
+  if (!el) return toast('Nothing to print', 'error');
+  printElement(`
+    <div style="font-family:system-ui;padding:2rem;max-width:800px;margin:auto">
+      ${el.innerHTML}
+    </div>
+  `);
+}
+
+async function shareDayEndWhatsApp() {
+  const d = DAYEND_DATE;
+  const snap = await db.collection('payments').where('date','==',d).get();
+  const pays = snap.docs.map(x => x.data());
+  const byMode = {};
+  let total = 0;
+  pays.forEach(p => {
+    const m = p.mode || 'Unknown';
+    byMode[m] = (byMode[m]||0) + (p.amount||0);
+    total += (p.amount||0);
+  });
+
+  const lines = [];
+  lines.push('*StraightUpMedical — Day-End Report*');
+  lines.push('📅 ' + d);
+  lines.push('');
+  lines.push('*TOTALS*');
+  Object.entries(byMode).sort((a,b)=>b[1]-a[1]).forEach(([m,a]) => {
+    lines.push(`${m}: KES ${a.toLocaleString()}`);
+  });
+  lines.push('—————');
+  lines.push(`*TOTAL: KES ${total.toLocaleString()}*`);
+  lines.push('');
+  lines.push(`Transactions: ${pays.length}`);
+  lines.push('');
+  lines.push('Signed: ________________');
+
+  const text = lines.join('\n');
+  const encoded = encodeURIComponent(text);
+  const url = `https://wa.me/?text=${encoded}`;
+
+  // Try native share (mobile) first, then WhatsApp web fallback
+  if (navigator.share) {
+    try {
+      await navigator.share({ title: 'Day-End Report', text });
+      return;
+    } catch (e) {
+      // user cancelled or share failed → fall through to WhatsApp
+    }
+  }
+  window.open(url, '_blank');
+}
 async function showPatientBalance(pid) {
   const start = new Date(); start.setDate(start.getDate()-30);
   const startStr = start.toISOString().toISOString ? start.toISOString().slice(0,10) : start.toISOString().slice(0,10);
