@@ -3648,6 +3648,14 @@ async function savePayment() {
   const inp = document.getElementById('pay_patient');
   const patientId = inp.dataset.patientId;
   if (!patientId) return toast('Select patient', 'error');
+    // 🔒 Check day lock
+  const today = todayStr();
+  try {
+    const lockDoc = await db.collection('dayLocks').doc(today).get();
+    if (lockDoc.exists && lockDoc.data().locked === true) {
+      return toast('Today is locked. Contact admin to unlock before recording new payments.', 'error');
+    }
+  } catch (e) { /* ignore lock check errors */ }
   const items = [...document.querySelectorAll('#pay_items > div')].map(r => ({
     desc: r.querySelector('.pay-item-desc').value.trim(),
     amount: parseFloat(r.querySelector('.pay-item-amt').value)||0
@@ -4080,11 +4088,13 @@ async function renderBalances() {
 // ============================================================
 let DAYEND_DATE = new Date().toISOString().slice(0,10);
 
+
 async function renderDayEnd() {
   const d = DAYEND_DATE;
-  const [paysSnap, visitsSnap] = await Promise.all([
+  const [paysSnap, visitsSnap, lockDoc] = await Promise.all([
     db.collection('payments').where('date','==',d).get(),
-    db.collection('visits').where('date','==',d).get()
+    db.collection('visits').where('date','==',d).get(),
+    db.collection('dayLocks').doc(d).get()
   ]);
   const pays = paysSnap.docs.map(x => ({ id: x.id, ...x.data() }))
     .sort((a,b) => {
@@ -4093,6 +4103,8 @@ async function renderDayEnd() {
       return ta - tb;
     });
   const visits = visitsSnap.docs.map(x => x.data());
+  const isLocked = lockDoc.exists && lockDoc.data().locked === true;
+  const lockInfo = lockDoc.exists ? lockDoc.data() : null;
 
   const byMode = {};
   const countMode = {};
@@ -4109,17 +4121,37 @@ async function renderDayEnd() {
 
   document.getElementById('reportBody').innerHTML = `
     <div class="flex justify-between items-center mb-3 flex-wrap gap-2">
-      <div class="flex gap-2">
+      <div class="flex gap-2 items-center flex-wrap">
         <button onclick="dayEndJump('${yesterday.toISOString().slice(0,10)}')" class="btn btn-secondary text-sm">← Prev</button>
         <button onclick="dayEndJump('${todayStr()}')" class="btn btn-secondary text-sm">Today</button>
         <button onclick="dayEndJump('${tomorrow.toISOString().slice(0,10)}')" class="btn btn-secondary text-sm">Next →</button>
+        ${isLocked ? '<span class="badge bg-red-100 text-red-700">🔒 LOCKED</span>' : '<span class="badge bg-green-100 text-green-700">OPEN</span>'}
       </div>
-      <div class="flex gap-2">
+      <div class="flex gap-2 flex-wrap">
         <input type="date" class="input" style="width:auto" value="${d}" onchange="dayEndJump(this.value)">
-        <button onclick="printDayEnd()" class="btn btn-primary text-sm">🖨 Print</button>
-        <button onclick="shareDayEndWhatsApp()" class="btn btn-primary text-sm" style="background:#25D366">📱 WhatsApp</button>
+        <button onclick="printDayEnd()" class="btn btn-secondary text-sm">🖨 Print</button>
+        <button onclick="shareDayEndWhatsApp()" class="btn btn-secondary text-sm" style="background:#25D366;color:#fff">📱 WhatsApp</button>
+        ${!isLocked
+          ? `<button onclick="lockDay('${d}')" class="btn btn-primary text-sm">🔒 Close Day</button>`
+          : (CURRENT_USER.role === 'admin'
+              ? `<button onclick="unlockDay('${d}')" class="btn btn-danger text-sm">🔓 Unlock Day</button>`
+              : '')}
       </div>
     </div>
+
+    ${lockInfo && lockInfo.locked && lockInfo.lockedByName ? `
+      <div class="card p-3 mb-3 bg-red-50 border border-red-200 text-sm">
+        <b class="text-red-700">🔒 Day locked</b> by ${esc(lockInfo.lockedByName)}.
+        No new payments can be recorded for ${esc(d)}.
+      </div>
+    ` : ''}
+
+    ${lockInfo && lockInfo.locked === false && lockInfo.unlockedByName ? `
+      <div class="card p-3 mb-3 bg-yellow-50 border border-yellow-200 text-sm">
+        <b class="text-yellow-800">🔓 Day was locked, then reopened</b> by ${esc(lockInfo.unlockedByName)}.
+        Reason: ${esc(lockInfo.unlockReason || '—')}
+      </div>
+    ` : ''}
 
     <div id="dayEndBody">
       <div class="text-center mb-4">
@@ -4182,7 +4214,6 @@ async function renderDayEnd() {
     </div>
   `;
 }
-
 function dayEndJump(d) {
   DAYEND_DATE = d;
   renderDayEnd();
@@ -4239,6 +4270,40 @@ async function shareDayEndWhatsApp() {
     }
   }
   window.open(url, '_blank');
+}
+  // ============================================================
+// DAY LOCK / UNLOCK
+// ============================================================
+async function isDayLocked(dateStr) {
+  const doc = await db.collection('dayLocks').doc(dateStr).get();
+  return doc.exists && doc.data().locked === true;
+}
+
+async function lockDay(dateStr) {
+  if (!confirm(`Lock payments for ${dateStr}?\n\nNo new payments can be recorded for this date until an admin unlocks it.`)) return;
+  await db.collection('dayLocks').doc(dateStr).set({
+    locked: true,
+    lockedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    lockedBy: CURRENT_USER.uid,
+    lockedByName: CURRENT_USER.name || CURRENT_USER.email
+  });
+  toast(`Day ${dateStr} locked`, 'success');
+  renderDayEnd();
+}
+
+async function unlockDay(dateStr) {
+  if (CURRENT_USER.role !== 'admin') return toast('Only admins can unlock a day', 'error');
+  const reason = prompt(`Unlock ${dateStr}?\n\nEnter reason for audit trail (required):`);
+  if (!reason || !reason.trim()) return toast('Unlock cancelled — reason required', 'error');
+  await db.collection('dayLocks').doc(dateStr).set({
+    locked: false,
+    unlockedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    unlockedBy: CURRENT_USER.uid,
+    unlockedByName: CURRENT_USER.name || CURRENT_USER.email,
+    unlockReason: reason.trim()
+  });
+  toast(`Day ${dateStr} unlocked`, 'success');
+  renderDayEnd();
 }
 async function showPatientBalance(pid) {
   const start = new Date(); start.setDate(start.getDate()-30);
@@ -4594,7 +4659,14 @@ async function invoicePaymentConfirm(invoiceId) {
   const invDoc = await db.collection('invoices').doc(invoiceId).get();
   if (!invDoc.exists) return toast('Invoice not found', 'error');
   const inv = invDoc.data();
-
+  // 🔒 Check day lock
+  const today = todayStr();
+  try {
+    const lockDoc = await db.collection('dayLocks').doc(today).get();
+    if (lockDoc.exists && lockDoc.data().locked === true) {
+      return toast('Today is locked. Contact admin to unlock before recording new payments.', 'error');
+    }
+  } catch (e) { /* ignore */ }
   const amount = parseFloat(document.getElementById('ipay_amount').value) || 0;
   if (amount <= 0) return toast('Enter an amount', 'error');
   const mode = document.getElementById('ipay_mode').value;
