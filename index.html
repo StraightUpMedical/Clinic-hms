@@ -4231,7 +4231,10 @@ async function viewReports(c) {
   else if (REPORT_TAB === 'balances') await renderBalances();
 }
 
-function reportTab(t) { REPORT_TAB = t; renderView('reports'); }
+function reportTab(t) {
+  REPORT_TAB = t;
+  viewReports(document.getElementById('mainContent'));
+}
 
 
 function printReportCurrent() {
@@ -4740,7 +4743,7 @@ async function showPatientBalance(pid) {
 
 function reportJump(d) {
   REPORT_DATE = d;
-  renderView('reports');
+  viewReports(document.getElementById('mainContent'));
 }
 // ============================================================
 // INVOICES MODULE
