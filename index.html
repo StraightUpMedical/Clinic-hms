@@ -332,8 +332,9 @@ function patientName(p) { return `${p.firstName || ''} ${p.lastName || ''}`.trim
 async function renderView(key) {
   CURRENT_VIEW = key;
   setActiveTab(key);
-  const c = document.getElementById('mainContent');
+    const c = document.getElementById('mainContent');
   c.innerHTML = '<div class="text-center py-10 text-gray-500">Loading…</div>';
+  c.offsetHeight;  // force a reflow so the browser registers the change
   try {
     if (key === 'dashboard')    await viewDashboard(c);
     else if (key === 'patients')    await viewPatients(c);
