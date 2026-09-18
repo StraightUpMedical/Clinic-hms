@@ -440,7 +440,7 @@ function renderPatientRows(list) {
   const tb = document.getElementById('patientRows');
   if (!list.length) { tb.innerHTML = '<tr><td colspan="7" class="text-center py-6 text-gray-400">No patients yet. Click "+ New Patient".</td></tr>'; return; }
   tb.innerHTML = list.map(p => {
-    const age = p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 3.154e10) : '—';
+   const age = p.age || (p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 3.154e10) : '—'); 
     return `<tr>
       <td>${esc(p.number || '—')}</td>
       <td><a href="#" onclick="openPatient('${p.id}');return false" class="text-blue-600 font-medium">${esc(patientName(p))}</a></td>
@@ -473,7 +473,7 @@ async function newPatientModal() {
             <div class="grid grid-cols-2 gap-3">
         <div><label class="label">First Name</label><input id="pf_firstName" class="input"></div>
         <div><label class="label">Last Name</label><input id="pf_lastName" class="input"></div>
-        <div><label class="label">Date of Birth</label><input id="pf_dob" type="date" class="input"></div>
+        <div><label class="label">Age</label><input id="pf_age" type="number" min="0" max="150" class="input" placeholder="e.g. 35"></div>
         <div><label class="label">Gender</label>
           <select id="pf_gender" class="input"><option value="">—</option><option>Male</option><option>Female</option></select>
         </div>
@@ -503,7 +503,7 @@ async function savePatient(e) {
     number: document.getElementById('pf_number').value,
     firstName: document.getElementById('pf_firstName').value.trim(),
     lastName: document.getElementById('pf_lastName').value.trim(),
-    dob: document.getElementById('pf_dob').value,
+    age: document.getElementById('pf_age').value,
     gender: document.getElementById('pf_gender').value,
     phone: document.getElementById('pf_phone').value.trim(),
     bloodGroup: document.getElementById('pf_bloodGroup').value,
@@ -554,7 +554,7 @@ async function openPatient(patientId) {
     <div class="flex justify-between items-start mb-4">
       <div>
         <h3 class="text-2xl font-bold">${esc(patientName(p))}</h3>
-        <p class="text-gray-500 text-sm">${esc(p.number||'')} · ${esc(p.gender||'')} · ${esc(p.dob||'')} · ${esc(p.phone||'')}</p>
+        <p class="text-gray-500 text-sm">${esc(p.number||'')} · ${esc(p.gender||'')} · ${p.age ? esc(p.age)+' yrs' : esc(p.dob||'')} · ${esc(p.phone||'')}</p>
       </div>
       <button onclick="closeModal()" class="btn btn-secondary">Close</button>
     </div>
@@ -2289,7 +2289,7 @@ function referralSelectPatient(pid) { referralNewModal(pid); }
 function referralNewModal(pid) {
   const p = pid ? CACHE.patients.find(x => x.id === pid) : null;
   const today = todayStr();
-  const age = p && p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 3.154e10) : '';
+  const age = p ? (p.age || (p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 3.154e10) : '')) : '';
   openModal(`
     <h3 class="text-xl font-bold mb-4">New Referral</h3>
 
@@ -2331,7 +2331,7 @@ function referralNewModal(pid) {
   `, 'max-w-3xl');
 
   patientPicker('rf_patient', (pt) => {
-    const age = pt.dob ? Math.floor((Date.now() - new Date(pt.dob)) / 3.154e10) : '';
+    const age = pt.age || (pt.dob ? Math.floor((Date.now() - new Date(pt.dob)) / 3.154e10) : '');
     document.getElementById('rf_gender').value = pt.gender || '';
     document.getElementById('rf_age').value = age;
     document.getElementById('rf_kin').value = pt.kin || '';
