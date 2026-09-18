@@ -30,11 +30,27 @@
   .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-start; justify-content:center; padding:2rem; overflow-y:auto; z-index:50; }
   .modal { background:#fff; border-radius:8px; max-width:900px; width:100%; padding:1.5rem; }
   @media print {
-  body { background: #fff !important; }
-  body > *:not(#printHelper) { display: none !important; }
-  #printHelper { display: block !important; position: absolute; left: 0; top: 0; width: 100%; padding: 2rem; background: #fff !important; color: #000 !important; }
-  .no-print { display: none !important; }
-}
+    body { background: #fff !important; }
+    /* Hide the app chrome */
+    #loginScreen, #appScreen > div:first-child, #navTabs, #modalRoot {
+      display: none !important;
+    }
+    /* Make mainContent fill the page */
+    #appScreen { display: block !important; }
+    #mainContent {
+      padding: 0 !important;
+      max-width: 100% !important;
+    }
+    /* Hide buttons and nav inside the report */
+    #mainContent button { display: none !important; }
+    /* Hide the report tab bar */
+    #mainContent > .flex.justify-between,
+    #mainContent > .bg-white.border-b {
+      display: none !important;
+    }
+    /* Force color printing for badges */
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  } 
 </style>
 </head>
 <body class="bg-gray-100">
