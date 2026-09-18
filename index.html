@@ -992,7 +992,16 @@ async function saveConsultation() {
   renderView('consultation');
 }
 // ---------- UNIVERSAL PRINT (iframe method, fixed timing) ----------
+// Track active print to prevent overlapping dialogs
+let PRINT_IN_PROGRESS = false;
+
 function printElement(selectorOrHtml) {
+  // Guard: refuse to print if a print is already open
+  if (PRINT_IN_PROGRESS) {
+    toast('A print is already open. Close it first.', 'error');
+    return;
+  }
+
   let html = '';
   if (typeof selectorOrHtml === 'string' && selectorOrHtml.trim().startsWith('<')) {
     html = selectorOrHtml;
@@ -1004,6 +1013,9 @@ function printElement(selectorOrHtml) {
     html = selectorOrHtml.innerHTML;
   }
   if (!html) { toast('Nothing to print', 'error'); return; }
+
+  // Aggressively clean up any existing iframe
+  document.querySelectorAll('#printIframe').forEach(f => f.remove());
 
   const fullHtml = `
     <!DOCTYPE html>
@@ -1022,61 +1034,52 @@ function printElement(selectorOrHtml) {
         .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; }
         .whitespace-pre-wrap { white-space: pre-wrap; }
         .text-center { text-align: center; }
-        .font-bold { font-weight: 700; }
-        .text-xs { font-size: 11px; }
         .text-sm { font-size: 12px; }
+        .text-xs { font-size: 11px; }
         .text-gray-500 { color: #666; }
         .text-red-600 { color: #dc2626; }
-        .text-red-700 { color: #b91c1c; }
         .bg-blue-100 { background: #dbeafe; }
-        .text-blue-700 { color: #1d4ed8; }
         .bg-yellow-100 { background: #fef3c7; }
-        .text-yellow-700 { color: #a16207; }
         .bg-green-100 { background: #dcfce7; }
-        .text-green-700 { color: #15803d; }
         .bg-gray-100 { background: #f3f4f6; }
-        .bg-gray-200 { background: #e5e7eb; }
       </style>
     </head>
     <body>${html}</body>
     </html>
   `;
 
-  // Remove any existing print iframe
-  const oldFrame = document.getElementById('printIframe');
-  if (oldFrame) oldFrame.remove();
-
-  // Create iframe
   const iframe = document.createElement('iframe');
   iframe.id = 'printIframe';
   iframe.style.position = 'fixed';
   iframe.style.right = '0';
   iframe.style.bottom = '0';
-  iframe.style.width = '0';
-  iframe.style.height = '0';
+  iframe.style.width = '1px';
+  iframe.style.height = '1px';
   iframe.style.border = '0';
-  iframe.style.visibility = 'hidden';
+  iframe.style.opacity = '0';
+  iframe.style.pointerEvents = 'none';
   document.body.appendChild(iframe);
 
-  // CRITICAL: attach onload BEFORE writing, so the event is caught
+  PRINT_IN_PROGRESS = true;
+
   iframe.onload = () => {
-    try {
-      // Small delay so the browser paints the content
-      setTimeout(() => {
+    setTimeout(() => {
+      try {
         iframe.contentWindow.focus();
         iframe.contentWindow.print();
-        // Remove the iframe after the print dialog closes
+      } catch (e) {
+        console.error('Print failed:', e);
+        toast('Print failed: ' + e.message, 'error');
+      } finally {
+        // Give the print dialog time to fully close before allowing another
         setTimeout(() => {
           if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-        }, 1500);
-      }, 100);
-    } catch (e) {
-      console.error('Print failed:', e);
-      toast('Print failed: ' + e.message, 'error');
-    }
+          PRINT_IN_PROGRESS = false;
+        }, 1000);
+      }
+    }, 150);
   };
 
-  // Write the document AFTER onload is attached
   const doc = iframe.contentWindow.document;
   doc.open();
   doc.write(fullHtml);
