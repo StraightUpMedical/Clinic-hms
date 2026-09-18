@@ -4241,11 +4241,32 @@ function reportTab(t) {
 function printReportCurrent() {
   const el = document.getElementById('reportBody');
   if (!el) return toast('Nothing to print', 'error');
-  printElement(`
-    <div style="font-family:system-ui;padding:2rem;max-width:800px;margin:auto">
+
+  // Save current page state
+  const originalBody = document.body.innerHTML;
+
+  // Build a clean print-only page
+  document.body.innerHTML = `
+    <div style="font-family: system-ui; padding: 2rem; max-width: 800px; margin: auto;">
+      <div style="text-align:center; border-bottom:2px solid #333; padding-bottom:.5rem; margin-bottom:1rem">
+        <img src="logo.png" alt="Logo" style="max-width:150px; max-height:60px; margin-bottom:.3rem">
+        <h1 style="margin:0; font-size:20px">StraightUpMedical</h1>
+        <p style="margin:0; font-size:12px; color:#555">Report</p>
+      </div>
       ${el.innerHTML}
     </div>
-  `);
+  `;
+
+  // Print
+  window.print();
+
+  // Restore the page (runs after print dialog closes)
+  document.body.innerHTML = originalBody;
+
+  // Re-attach the app after restore
+  if (typeof renderView === 'function' && typeof CURRENT_VIEW !== 'undefined') {
+    setTimeout(() => renderView(CURRENT_VIEW), 100);
+  }
 }
 async function renderReportDaily() {
   const d = REPORT_DATE;
@@ -4624,16 +4645,28 @@ function dayEndJump(d) {
   renderDayEnd();
 }
 
+
 function printDayEnd() {
   const el = document.getElementById('dayEndBody');
   if (!el) return toast('Nothing to print', 'error');
-  printElement(`
-    <div style="font-family:system-ui;padding:2rem;max-width:800px;margin:auto">
+
+  const originalBody = document.body.innerHTML;
+  document.body.innerHTML = `
+    <div style="font-family: system-ui; padding: 2rem; max-width: 800px; margin: auto;">
+      <div style="text-align:center; border-bottom:2px solid #333; padding-bottom:.5rem; margin-bottom:1rem">
+        <img src="logo.png" alt="Logo" style="max-width:150px; max-height:60px; margin-bottom:.3rem">
+        <h1 style="margin:0; font-size:20px">StraightUpMedical</h1>
+        <p style="margin:0; font-size:12px; color:#555">Day-End Report</p>
+      </div>
       ${el.innerHTML}
     </div>
-  `);
+  `;
+  window.print();
+  document.body.innerHTML = originalBody;
+  if (typeof renderView === 'function' && typeof CURRENT_VIEW !== 'undefined') {
+    setTimeout(() => renderView(CURRENT_VIEW), 100);
+  }
 }
-
 async function shareDayEndWhatsApp() {
   const d = DAYEND_DATE;
   const snap = await db.collection('payments').where('date','==',d).get();
