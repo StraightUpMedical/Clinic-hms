@@ -470,9 +470,9 @@ async function newPatientModal() {
     <h3 class="text-xl font-bold mb-4">Register New Patient</h3>
     <form id="patientForm" onsubmit="savePatient(event)">
       <input type="hidden" id="pf_number" value="${number}">
-      <div class="grid grid-cols-2 gap-3">
-        <div><label class="label">First Name *</label><input id="pf_firstName" required class="input"></div>
-        <div><label class="label">Last Name *</label><input id="pf_lastName" required class="input"></div>
+            <div class="grid grid-cols-2 gap-3">
+        <div><label class="label">First Name</label><input id="pf_firstName" class="input"></div>
+        <div><label class="label">Last Name</label><input id="pf_lastName" class="input"></div>
         <div><label class="label">Date of Birth</label><input id="pf_dob" type="date" class="input"></div>
         <div><label class="label">Gender</label>
           <select id="pf_gender" class="input"><option value="">—</option><option>Male</option><option>Female</option></select>
