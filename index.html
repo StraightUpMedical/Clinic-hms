@@ -918,11 +918,11 @@ async function consultNewModal(pid) {
     ${vitalsHtml}
 
     <div class="grid grid-cols-1 gap-3">
-      <div><label class="label">Chief Complaints *</label><textarea id="cs_complaint" class="input" rows="2"></textarea></div>
+      <div><label class="label">Chief Complaints </label><textarea id="cs_complaint" class="input" rows="2"></textarea></div>
       <div><label class="label">History (past medical / surgical / drug)</label><textarea id="cs_history" class="input" rows="2"></textarea></div>
       <div><label class="label">Physical Examination</label><textarea id="cs_exam" class="input" rows="2"></textarea></div>
       <div><label class="label">Investigations Planned</label><textarea id="cs_investigations" class="input" rows="2" placeholder="e.g. CBC, Urinalysis, CXR"></textarea></div>
-      <div><label class="label">Diagnosis *</label><input id="cs_diagnosis" class="input"></div>
+      <div><label class="label">Diagnosis</label><input id="cs_diagnosis" class="input"></div>
       <div><label class="label">Treatment Plan</label><textarea id="cs_treatment" class="input" rows="2"></textarea></div>
       <div><label class="label">Follow-up Date</label><input id="cs_followup" type="date" class="input"></div>
     </div>
@@ -975,7 +975,6 @@ async function saveConsultation() {
   const patientId = inp.dataset.patientId;
   if (!patientId) return toast('Select a patient', 'error');
   const diagnosis = document.getElementById('cs_diagnosis').value.trim();
-  if (!diagnosis) return toast('Diagnosis is required', 'error');
 
   const visit = await getOrCreateTodayVisit(patientId);
   await db.collection('consultations').add({
@@ -1140,7 +1139,7 @@ async function consultEdit(id) {
       <div><label class="label">History</label><textarea id="ce_history" class="input" rows="2">${esc(c.history||'')}</textarea></div>
       <div><label class="label">Physical Examination</label><textarea id="ce_exam" class="input" rows="2">${esc(c.exam||'')}</textarea></div>
       <div><label class="label">Investigations Planned</label><textarea id="ce_investigations" class="input" rows="2">${esc(c.investigations||'')}</textarea></div>
-      <div><label class="label">Diagnosis *</label><input id="ce_diagnosis" class="input" value="${esc(c.diagnosis||'')}"></div>
+      <div><label class="label">Diagnosis</label><input id="ce_diagnosis" class="input" value="${esc(c.diagnosis||'')}"></div>
       <div><label class="label">Treatment Plan</label><textarea id="ce_treatment" class="input" rows="2">${esc(c.treatment||'')}</textarea></div>
       <div><label class="label">Follow-up Date</label><input id="ce_followup" type="date" class="input" value="${esc(c.followUp||'')}"></div>
     </div>
@@ -1154,7 +1153,6 @@ async function consultEdit(id) {
 
 async function saveConsultEdit(id) {
   const diagnosis = document.getElementById('ce_diagnosis').value.trim();
-  if (!diagnosis) return toast('Diagnosis is required', 'error');
 
   const doc = await db.collection('consultations').doc(id).get();
   if (!doc.exists) return toast('Consultation not found', 'error');
