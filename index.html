@@ -996,12 +996,6 @@ async function saveConsultation() {
 let PRINT_IN_PROGRESS = false;
 
 function printElement(selectorOrHtml) {
-  // Guard: refuse to print if a print is already open
-  if (PRINT_IN_PROGRESS) {
-    toast('A print is already open. Close it first.', 'error');
-    return;
-  }
-
   let html = '';
   if (typeof selectorOrHtml === 'string' && selectorOrHtml.trim().startsWith('<')) {
     html = selectorOrHtml;
@@ -1014,14 +1008,23 @@ function printElement(selectorOrHtml) {
   }
   if (!html) { toast('Nothing to print', 'error'); return; }
 
-  // Aggressively clean up any existing iframe
-  document.querySelectorAll('#printIframe').forEach(f => f.remove());
+  // Open a new window/tab for printing
+  const w = window.open('', '_blank', 'width=900,height=700');
+  if (!w) {
+    toast('Please allow pop-ups for this site to print', 'error');
+    return;
+  }
 
-  const fullHtml = `
+  // Get the origin so relative paths (logo.png) resolve
+  const baseUrl = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+
+  w.document.open();
+  w.document.write(`
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="UTF-8">
+      <base href="${baseUrl}">
       <title>Print</title>
       <style>
         * { box-sizing: border-box; }
@@ -1031,7 +1034,7 @@ function printElement(selectorOrHtml) {
         th, td { padding: 6px; text-align: left; border-bottom: 1px solid #ccc; font-size: 13px; }
         th { background: #f0f0f0; font-weight: 600; }
         img { max-width: 100%; }
-        .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; }
+        .badge { padding: 2px 6px; border-radius: 3px; font-size: 11px; display: inline-block; }
         .whitespace-pre-wrap { white-space: pre-wrap; }
         .text-center { text-align: center; }
         .text-sm { font-size: 12px; }
@@ -1042,48 +1045,36 @@ function printElement(selectorOrHtml) {
         .bg-yellow-100 { background: #fef3c7; }
         .bg-green-100 { background: #dcfce7; }
         .bg-gray-100 { background: #f3f4f6; }
+        .grid { display: block; } /* flatten grids for print */
+        .card { border: 1px solid #ddd; border-radius: 4px; padding: 8px; margin: .5rem 0; }
+        button { display: none !important; }
+        @media print {
+          body { padding: 0; }
+          @page { margin: 15mm; }
+        }
       </style>
     </head>
     <body>${html}</body>
     </html>
-  `;
+  `);
+  w.document.close();
 
-  const iframe = document.createElement('iframe');
-  iframe.id = 'printIframe';
-  iframe.style.position = 'fixed';
-  iframe.style.right = '0';
-  iframe.style.bottom = '0';
-  iframe.style.width = '1px';
-  iframe.style.height = '1px';
-  iframe.style.border = '0';
-  iframe.style.opacity = '0';
-  iframe.style.pointerEvents = 'none';
-  document.body.appendChild(iframe);
-
-  PRINT_IN_PROGRESS = true;
-
-  iframe.onload = () => {
-    setTimeout(() => {
-      try {
-        iframe.contentWindow.focus();
-        iframe.contentWindow.print();
-      } catch (e) {
-        console.error('Print failed:', e);
-        toast('Print failed: ' + e.message, 'error');
-      } finally {
-        // Give the print dialog time to fully close before allowing another
-        setTimeout(() => {
-          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-          PRINT_IN_PROGRESS = false;
-        }, 1000);
-      }
-    }, 150);
+  // Wait for images to load, then print
+  const triggerPrint = () => {
+    try {
+      w.focus();
+      w.print();
+    } catch (e) {
+      console.error('Print error:', e);
+    }
   };
 
-  const doc = iframe.contentWindow.document;
-  doc.open();
-  doc.write(fullHtml);
-  doc.close();
+  // If images are still loading, wait; otherwise print quickly
+  if (w.document.readyState === 'complete') {
+    setTimeout(triggerPrint, 300);
+  } else {
+    w.addEventListener('load', () => setTimeout(triggerPrint, 300));
+  }
 }
   // ============================================================
 // LAB RESULT FLAGGING
