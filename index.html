@@ -4259,33 +4259,25 @@ function reportTab(t) {
 
 function printReportCurrent() {
   const el = document.getElementById('reportBody');
-  if (!el) return toast('Nothing to print', 'error');
+  if (!el || !el.innerHTML.trim()) return toast('Nothing to print', 'error');
 
-  // Save current page state
-  const originalBody = document.body.innerHTML;
+  const w = window.open('', '_blank');
+  if (!w) return toast('Please allow pop-ups for this site', 'error');
 
-  // Build a clean print-only page
-  document.body.innerHTML = `
-    <div style="font-family: system-ui; padding: 2rem; max-width: 800px; margin: auto;">
-      <div style="text-align:center; border-bottom:2px solid #333; padding-bottom:.5rem; margin-bottom:1rem">
-        <img src="logo.png" alt="Logo" style="max-width:150px; max-height:60px; margin-bottom:.3rem">
-        <h1 style="margin:0; font-size:20px">StraightUpMedical</h1>
-        <p style="margin:0; font-size:12px; color:#555">Report</p>
-      </div>
+  w.document.write(`
+    <!DOCTYPE html><html><head><title>Print</title>
+    <style>
+      body { font-family: system-ui; padding: 2rem; max-width: 800px; margin: auto; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 6px; text-align: left; border-bottom: 1px solid #ccc; font-size: 13px; }
+      th { background: #f0f0f0; }
+    </style></head><body>
       ${el.innerHTML}
-    </div>
-  `;
-
-  // Print
-  window.print();
-
-  // Restore the page (runs after print dialog closes)
-  document.body.innerHTML = originalBody;
-
-  // Re-attach the app after restore
-  if (typeof renderView === 'function' && typeof CURRENT_VIEW !== 'undefined') {
-    setTimeout(() => renderView(CURRENT_VIEW), 100);
-  }
+    </body></html>
+  `);
+  w.document.close();
+  w.focus();
+  setTimeout(() => w.print(), 400);
 }
 async function renderReportDaily() {
   const d = REPORT_DATE;
