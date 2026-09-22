@@ -838,23 +838,59 @@ async function saveVitals() {
 // ============================================================
 // CONSULTATION MODULE
 // ============================================================
+let CONSULT_DATE = new Date().toISOString().slice(0,10); // default: today
+let CONSULT_SHOW_ALL = false;
+
 async function viewConsultation(c) {
   await refreshPatients();
   const today = todayStr();
-  const [consSnap, vitalsSnap] = await Promise.all([
-    db.collection('consultations').where('date','==',today).get(),
-    db.collection('vitals').where('date','==',today).get()
-  ]);
+
+  // Build query based on filter
+  let consSnap;
+  if (CONSULT_SHOW_ALL) {
+    consSnap = await db.collection('consultations')
+      .orderBy('createdAt', 'desc')
+      .limit(200)
+      .get();
+  } else {
+    consSnap = await db.collection('consultations')
+      .where('date', '==', CONSULT_DATE)
+      .get();
+  }
+
+  const vitalsSnap = await db.collection('vitals')
+    .where('date', '==', CONSULT_SHOW_ALL ? today : CONSULT_DATE)
+    .get();
+
+  const consultDate = CONSULT_SHOW_ALL ? today : CONSULT_DATE;
   const consulted = new Set(consSnap.docs.map(d => d.data().patientId));
   const todayVitals = vitalsSnap.docs.map(d => d.data());
   const waiting = todayVitals.filter(v => !consulted.has(v.patientId))
     .map(v => CACHE.patients.find(p => p.id === v.patientId))
     .filter(Boolean);
 
+  const consDocs = consSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const yesterday = new Date(consultDate); yesterday.setDate(yesterday.getDate()-1);
+  const tomorrow = new Date(consultDate); tomorrow.setDate(tomorrow.getDate()+1);
+  const yStr = yesterday.toISOString().slice(0,10);
+  const tStr = tomorrow.toISOString().slice(0,10);
+
   c.innerHTML = `
-    <div class="flex justify-between items-center mb-4">
+    <div class="flex justify-between items-center mb-4 flex-wrap gap-2">
       <h2 class="text-2xl font-bold">Consultation</h2>
       <button onclick="consultNewModal()" class="btn btn-primary">+ New Consultation</button>
+    </div>
+
+    <div class="card p-4 mb-4">
+      <div class="flex gap-2 items-center flex-wrap">
+        <button onclick="consultJump('${yStr}')" class="btn btn-secondary text-sm" ${CONSULT_SHOW_ALL?'disabled':''}>← Prev</button>
+        <button onclick="consultJump('${today}')" class="btn btn-secondary text-sm" ${CONSULT_SHOW_ALL?'disabled':''}>Today</button>
+        <button onclick="consultJump('${tStr}')" class="btn btn-secondary text-sm" ${CONSULT_SHOW_ALL?'disabled':''}>Next →</button>
+        <input type="date" class="input" style="width:auto" value="${consultDate}" onchange="consultJump(this.value)" ${CONSULT_SHOW_ALL?'disabled':''}>
+        <button onclick="consultToggleAll()" class="btn ${CONSULT_SHOW_ALL?'btn-primary':'btn-secondary'} text-sm">
+          ${CONSULT_SHOW_ALL ? '✓ Showing all dates' : 'Show all dates'}
+        </button>
+      </div>
     </div>
 
     <div class="card p-4 mb-4">
@@ -873,24 +909,43 @@ async function viewConsultation(c) {
     </div>
 
     <div class="card p-4">
-      <h3 class="font-semibold mb-2">Consultations Today (${consSnap.size})</h3>
-      ${consSnap.size ? `<table><thead><tr><th>Time</th><th>Patient</th><th>Diagnosis</th><th></th></tr></thead><tbody>
-        ${consSnap.docs.map(d => {
-          const x = d.data();
+      <h3 class="font-semibold mb-2">
+        ${CONSULT_SHOW_ALL ? `All Consultations (${consDocs.length})` : `Consultations — ${esc(consultDate)} (${consDocs.length})`}
+      </h3>
+      ${consDocs.length ? `<div class="max-h-[600px] overflow-y-auto"><table><thead><tr>
+        <th>Date</th><th>Time</th><th>Patient</th><th>Diagnosis</th><th></th>
+      </tr></thead><tbody>
+        ${consDocs.map(x => {
           const p = CACHE.patients.find(y => y.id === x.patientId);
+          const ts = x.createdAt?.toDate ? x.createdAt.toDate() : new Date(x.createdAt || 0);
+          const dateOnly = ts.toISOString().slice(0,10);
+          const timeOnly = ts.toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
           return `<tr>
-            <td>${fmtDate(x.createdAt)}</td>
+            <td class="text-xs text-gray-500">${esc(x.date || dateOnly)}</td>
+            <td class="text-xs text-gray-500">${esc(timeOnly)}</td>
             <td>${esc(p ? patientName(p) : '—')}</td>
             <td>${esc(x.diagnosis||'—')}</td>
             <td class="whitespace-nowrap">
-  <button onclick="consultView('${d.id}')" class="text-blue-600 text-sm">View</button>
-  <button onclick="consultEdit('${d.id}')" class="text-blue-600 text-sm ml-2">Edit</button>
-  <button onclick="consultDelete('${d.id}')" class="text-red-600 text-sm ml-2">Delete</button>
-</td>
+              <button onclick="consultView('${x.id}')" class="text-blue-600 text-sm">View</button>
+              <button onclick="consultEdit('${x.id}')" class="text-blue-600 text-sm ml-2">Edit</button>
+              <button onclick="consultDelete('${x.id}')" class="text-red-600 text-sm ml-2">Delete</button>
+            </td>
           </tr>`;
         }).join('')}
-      </tbody></table>` : '<p class="text-gray-400">No consultations yet today.</p>'}
+      </tbody></table></div>` : '<p class="text-gray-400">No consultations for this period.</p>'}
     </div>`;
+}
+
+function consultJump(d) {
+  CONSULT_DATE = d;
+  CONSULT_SHOW_ALL = false;
+  viewConsultation(document.getElementById('mainContent'));
+}
+
+function consultToggleAll() {
+  CONSULT_SHOW_ALL = !CONSULT_SHOW_ALL;
+  if (!CONSULT_SHOW_ALL) CONSULT_DATE = todayStr();
+  viewConsultation(document.getElementById('mainContent'));
 }
 
 function consultSelectPatient(pid) { consultNewModal(pid); }
