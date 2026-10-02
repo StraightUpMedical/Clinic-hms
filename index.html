@@ -1110,7 +1110,7 @@ function printElement(selectorOrHtml) {
           background-repeat: no-repeat;
           background-position: center;
           background-size: contain;
-          opacity: 0.08;
+          opacity: 0.09;
           z-index: 0;
           pointer-events: none;
         }
@@ -1138,15 +1138,13 @@ function printElement(selectorOrHtml) {
         .grid { display: block; }
         .card { border: 1px solid #ddd; border-radius: 4px; padding: 8px; margin: .5rem 0; }
         button { display: none !important; }
-        @media print {
+               @media print {
           body { padding: 0; }
           @page { margin: 15mm; }
           body::before { opacity: 0.08 !important; }
           * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         }
-      </style>
-    </head>
-    @media print {
+        @media print {
   body::before {
     content: "";
     position: fixed;
@@ -1175,6 +1173,8 @@ function printElement(selectorOrHtml) {
     print-color-adjust: exact !important;
   }
 }
+      </style>
+    </head> 
     <body>${html}</body>
     </html>
   `);
